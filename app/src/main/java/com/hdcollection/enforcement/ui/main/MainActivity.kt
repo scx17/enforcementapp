@@ -7,12 +7,13 @@ import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.KeyEvent
+import android.view.SurfaceView
 import android.widget.ImageButton
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import android.view.SurfaceView
 import com.hdcollection.enforcement.R
 import com.hdcollection.enforcement.camera.Camera2Preview
 import com.hdcollection.enforcement.data.AppSettings
@@ -22,6 +23,7 @@ import com.hdcollection.enforcement.ui.function.FunctionActivity
 import com.hdcollection.enforcement.ui.playback.PlaybackActivity
 import com.hdcollection.enforcement.ui.settings.SettingsActivity
 import timber.log.Timber
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -31,6 +33,8 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     private lateinit var settings: AppSettings
     private lateinit var gb28181Manager: GB28181Manager
     private lateinit var camera: Camera2Preview
+
+    private var isRecording = false
 
     private val clockHandler = Handler(Looper.getMainLooper())
     private val clockRunnable = object : Runnable {
@@ -186,6 +190,46 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     override fun onIntercomReceived(callerInfo: String) {
         Timber.i("Intercom received from: $callerInfo")
         // SIP 对讲 UI 在 Task 17 实现
+    }
+
+    // 物理按键绑定（DSJ-Z6 执法仪）
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        return when (keyCode) {
+            // 录像键：KEYCODE_CAMERA 或执法仪自定义键码 293
+            KeyEvent.KEYCODE_CAMERA, 293 -> {
+                toggleLocalRecording()
+                true
+            }
+            // 截图键：KEYCODE_FOCUS 或执法仪自定义键码 294
+            KeyEvent.KEYCODE_FOCUS, 294 -> {
+                capturePhoto()
+                true
+            }
+            else -> super.onKeyDown(keyCode, event)
+        }
+    }
+
+    private fun toggleLocalRecording() {
+        if (isRecording) {
+            camera.stopLocalRecording()
+            isRecording = false
+            Timber.i("Local recording stopped")
+        } else {
+            val dir = getExternalFilesDir("recordings") ?: filesDir
+            val file = File(dir, "rec_${System.currentTimeMillis()}.mp4")
+            camera.startLocalRecording(file)
+            isRecording = true
+            Timber.i("Local recording started: ${file.name}")
+        }
+    }
+
+    private fun capturePhoto() {
+        val dir = getExternalFilesDir("photos") ?: filesDir
+        val file = File(dir, "photo_${System.currentTimeMillis()}.jpg")
+        camera.capturePhoto(file) { savedFile ->
+            Timber.i("Photo captured: ${savedFile.name}")
+            // 上传队列在 Task 15 实现
+        }
     }
 
     companion object {
