@@ -19,6 +19,7 @@ import com.hdcollection.enforcement.camera.Camera2Preview
 import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.gb28181.GB28181Manager
 import com.hdcollection.enforcement.gb28181.StreamCallback
+import com.hdcollection.enforcement.ui.LightPanelFragment
 import com.hdcollection.enforcement.ui.function.FunctionActivity
 import com.hdcollection.enforcement.ui.playback.PlaybackActivity
 import com.hdcollection.enforcement.ui.settings.SettingsActivity
@@ -92,8 +93,7 @@ class MainActivity : AppCompatActivity(), StreamCallback {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
         findViewById<ImageButton>(R.id.btnLight).setOnClickListener {
-            // 灯光面板在 Task 18 实现，此处预留
-            Timber.d("Light button clicked")
+            showLightPanel()
         }
         findViewById<ImageButton>(R.id.btnPlayback).setOnClickListener {
             startActivity(Intent(this, PlaybackActivity::class.java))
@@ -207,6 +207,10 @@ class MainActivity : AppCompatActivity(), StreamCallback {
             }
             else -> super.onKeyDown(keyCode, event)
         }
+    }
+
+    private fun showLightPanel() {
+        LightPanelFragment().show(supportFragmentManager, "light_panel")
     }
 
     private fun toggleLocalRecording() {
