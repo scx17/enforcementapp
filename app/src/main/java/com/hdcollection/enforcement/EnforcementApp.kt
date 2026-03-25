@@ -1,7 +1,13 @@
 package com.hdcollection.enforcement
 
 import android.app.Application
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 import com.hdcollection.enforcement.logging.FileLoggingTree
+import com.hdcollection.enforcement.service.UploadWorker
 import timber.log.Timber
 import java.io.File
 import java.text.SimpleDateFormat
@@ -27,5 +33,17 @@ class EnforcementApp : Application() {
         Timber.plant(FileLoggingTree(logFile))
 
         Timber.i("EnforcementApp started, log file: ${logFile.absolutePath}")
+
+        // 注册网络恢复时自动触发上传
+        val uploadRequest = OneTimeWorkRequestBuilder<UploadWorker>()
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+            )
+            .build()
+        WorkManager.getInstance(this).enqueueUniqueWork(
+            "auto_upload", ExistingWorkPolicy.REPLACE, uploadRequest
+        )
     }
 }
