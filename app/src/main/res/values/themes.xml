@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.EnforcementApp" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#1A237E</item>
+        <item name="colorPrimaryVariant">#0D47A1</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#2196F3</item>
+        <item name="android:windowBackground">#000000</item>
+    </style>
+</resources>

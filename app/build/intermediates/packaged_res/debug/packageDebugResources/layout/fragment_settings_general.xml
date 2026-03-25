@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#1A1A2E"
+    android:padding="16dp">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
+
+        <TextView android:text="视频分辨率" android:textColor="#AAAAAA" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Spinner android:id="@+id/spinnerResolution" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:background="#2A2A3E" android:layout_marginBottom="12dp" />
+
+        <TextView android:text="视频码率（kbps）" android:textColor="#AAAAAA" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <EditText android:id="@+id/etBitrate" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="2048" android:inputType="number" android:textColor="#FFFFFF" android:textColorHint="#666666"
+            android:background="#2A2A3E" android:padding="8dp" android:layout_marginBottom="24dp" />
+
+        <Button android:id="@+id/btnSaveGeneral" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="保存" android:backgroundTint="#1A237E" android:textColor="#FFFFFF" />
+    </LinearLayout>
+</ScrollView>
