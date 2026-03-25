@@ -12,7 +12,9 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import android.view.SurfaceView
 import com.hdcollection.enforcement.R
+import com.hdcollection.enforcement.camera.Camera2Preview
 import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.gb28181.GB28181Manager
 import com.hdcollection.enforcement.gb28181.StreamCallback
@@ -28,6 +30,7 @@ class MainActivity : AppCompatActivity(), StreamCallback {
 
     private lateinit var settings: AppSettings
     private lateinit var gb28181Manager: GB28181Manager
+    private lateinit var camera: Camera2Preview
 
     private val clockHandler = Handler(Looper.getMainLooper())
     private val clockRunnable = object : Runnable {
@@ -49,6 +52,9 @@ class MainActivity : AppCompatActivity(), StreamCallback {
 
         settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
         gb28181Manager = GB28181Manager(settings, this)
+
+        val surfaceView = findViewById<SurfaceView>(R.id.surfacePreview)
+        camera = Camera2Preview(this, surfaceView)
 
         setupBottomButtons()
         updateDeviceInfo()
@@ -168,13 +174,13 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     override fun onStreamStartRequested(channelId: String, rtpIp: String, rtpPort: Int) {
         Timber.i("Stream start requested: $channelId -> $rtpIp:$rtpPort")
         runOnUiThread { updateStreamStatus("推流中", "#2196F3") }
-        // Camera2Preview + RtpStreamer 在 Task 13 实现
+        camera.startEncoding(rtpIp, rtpPort)
     }
 
     override fun onStreamStopRequested(channelId: String) {
         Timber.i("Stream stop requested: $channelId")
+        camera.stopEncoding()
         runOnUiThread { updateStreamStatus("注册在线", "#4CAF50") }
-        // 停止推流在 Task 13 实现
     }
 
     override fun onIntercomReceived(callerInfo: String) {
