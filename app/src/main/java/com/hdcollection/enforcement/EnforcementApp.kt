@@ -6,8 +6,13 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.logging.FileLoggingTree
+import com.hdcollection.enforcement.notification.PlatformNotificationService
 import com.hdcollection.enforcement.service.UploadWorker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import timber.log.Timber
 import java.io.File
 import java.text.SimpleDateFormat
@@ -16,6 +21,9 @@ import java.util.*
 class EnforcementApp : Application() {
 
     lateinit var logFile: File
+        private set
+
+    lateinit var notificationService: PlatformNotificationService
         private set
 
     override fun onCreate() {
@@ -33,6 +41,13 @@ class EnforcementApp : Application() {
         Timber.plant(FileLoggingTree(logFile))
 
         Timber.i("EnforcementApp started, log file: ${logFile.absolutePath}")
+
+        // 初始化 SignalR 平台通知
+        val settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
+        notificationService = PlatformNotificationService(this, settings)
+        CoroutineScope(Dispatchers.IO).launch {
+            notificationService.connect()
+        }
 
         // 注册网络恢复时自动触发上传
         val uploadRequest = OneTimeWorkRequestBuilder<UploadWorker>()

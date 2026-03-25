@@ -1,5 +1,6 @@
 package com.hdcollection.enforcement.ui.function
 
+import android.content.Intent
 import android.os.Bundle
 import android.widget.LinearLayout
 import android.widget.Toast
@@ -8,10 +9,10 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.hdcollection.enforcement.R
-import com.hdcollection.enforcement.camera.Camera2Preview
 import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.service.UploadWorker
 import com.hdcollection.enforcement.ui.LightPanelFragment
+import com.hdcollection.enforcement.ui.notification.NotificationListActivity
 import timber.log.Timber
 import java.io.File
 
@@ -43,7 +44,7 @@ class FunctionActivity : AppCompatActivity() {
 
         // 平台通知
         findViewById<LinearLayout>(R.id.btnNotification).setOnClickListener {
-            Toast.makeText(this, "暂无新通知", Toast.LENGTH_SHORT).show()
+            startActivity(Intent(this, NotificationListActivity::class.java))
         }
 
         // 单独拍照
