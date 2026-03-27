@@ -7,13 +7,18 @@ import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.view.KeyEvent
 import android.view.SurfaceView
+import android.view.WindowManager
+import android.widget.Button
 import android.widget.ImageButton
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.hdcollection.enforcement.EnforcementApp
 import com.hdcollection.enforcement.R
 import com.hdcollection.enforcement.camera.Camera2Preview
 import com.hdcollection.enforcement.data.AppSettings
@@ -36,6 +41,7 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     private lateinit var camera: Camera2Preview
 
     private var isRecording = false
+    private var wakeLock: PowerManager.WakeLock? = null
 
     private val clockHandler = Handler(Looper.getMainLooper())
     private val clockRunnable = object : Runnable {
@@ -55,6 +61,12 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // 保持屏幕常亮 + WakeLock 防止 CPU 休眠
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "EnforcementApp::MainWakeLock")
+        wakeLock?.acquire()
+
         settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
         gb28181Manager = GB28181Manager(settings, this)
 
@@ -69,6 +81,11 @@ class MainActivity : AppCompatActivity(), StreamCallback {
             startGB28181()
         } else {
             ActivityCompat.requestPermissions(this, requiredPermissions, REQUEST_PERMISSIONS)
+        }
+
+        // 注册 SIP 来电监听
+        (application as EnforcementApp).sipManager.onIncomingCall = { call ->
+            runOnUiThread { showIncomingCallDialog(call) }
         }
     }
 
@@ -86,6 +103,7 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     override fun onDestroy() {
         super.onDestroy()
         gb28181Manager.unregister()
+        wakeLock?.let { if (it.isHeld) it.release() }
     }
 
     private fun setupBottomButtons() {
@@ -234,6 +252,26 @@ class MainActivity : AppCompatActivity(), StreamCallback {
             Timber.i("Photo captured: ${savedFile.name}")
             // 上传队列在 Task 15 实现
         }
+    }
+
+    private fun showIncomingCallDialog(callerUri: String) {
+        val view = layoutInflater.inflate(R.layout.dialog_incoming_call, null)
+        view.findViewById<TextView>(R.id.tvCaller).text = callerUri
+
+        val dialog = AlertDialog.Builder(this)
+            .setView(view)
+            .setCancelable(false)
+            .create()
+
+        view.findViewById<Button>(R.id.btnAccept).setOnClickListener {
+            (application as EnforcementApp).sipManager.acceptCall()
+            dialog.dismiss()
+        }
+        view.findViewById<Button>(R.id.btnDecline).setOnClickListener {
+            (application as EnforcementApp).sipManager.declineCall()
+            dialog.dismiss()
+        }
+        dialog.show()
     }
 
     companion object {

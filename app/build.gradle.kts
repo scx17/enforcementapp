@@ -69,6 +69,8 @@ dependencies {
     // WorkManager
     implementation(libs.workmanager)
 
+    // SIP 对讲：使用内置 AudioRecord/AudioTrack + 扩展 GB28181 SIP 实现
+
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
 

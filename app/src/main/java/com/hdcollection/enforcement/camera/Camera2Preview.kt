@@ -193,7 +193,7 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
                         codec.releaseOutputBuffer(index, false)
 
                         val isKeyFrame = bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
-                        rtpSender?.sendVideoFrame(data, bufferInfo.presentationTimeUs / 1000)
+                        rtpSender?.sendVideoFrame(data, bufferInfo.presentationTimeUs / 1000, isKeyFrame)
                         Timber.v("RTP frame sent: ${data.size} bytes, keyframe=$isKeyFrame")
                     }
                 } catch (e: Exception) {

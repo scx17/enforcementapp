@@ -8,6 +8,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import com.hdcollection.enforcement.EnforcementApp
 import com.hdcollection.enforcement.R
 import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.service.UploadWorker
@@ -31,10 +32,19 @@ class FunctionActivity : AppCompatActivity() {
             triggerUpload()
         }
 
-        // 集群对讲 —— Task 17 PJSIP 实现后接入
+        // 集群对讲 —— 呼叫指挥中心 SIP URI
         findViewById<LinearLayout>(R.id.btnGroupIntercom).setOnClickListener {
-            Toast.makeText(this, "集群对讲功能开发中", Toast.LENGTH_SHORT).show()
-            Timber.d("Group intercom clicked (PJSIP pending)")
+            val sipManager = (application as EnforcementApp).sipManager
+            if (sipManager.isInCall()) {
+                sipManager.hangup()
+                Toast.makeText(this, "已挂断对讲", Toast.LENGTH_SHORT).show()
+            } else {
+                val settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
+                val targetUri = "sip:commander@${settings.sipServer}"
+                sipManager.makeCall(targetUri)
+                Toast.makeText(this, "正在呼叫指挥中心...", Toast.LENGTH_SHORT).show()
+                Timber.i("Group intercom: calling $targetUri")
+            }
         }
 
         // 运行日志

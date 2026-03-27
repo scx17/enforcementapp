@@ -26,7 +26,10 @@ class GB28181Manager(
         scope.launch {
             try {
                 localIp = getLocalIp()
-                udpSocket = DatagramSocket(localPort)
+                // 绑定到 IPv4 wildcard 0.0.0.0，确保接收所有 IPv4 UDP 包
+                udpSocket = DatagramSocket(null)
+                udpSocket!!.reuseAddress = true
+                udpSocket!!.bind(java.net.InetSocketAddress("0.0.0.0", localPort))
                 Timber.i("GB28181: registering ${settings.deviceId} to ${settings.sipServer}:${settings.sipPort}")
 
                 startListening()

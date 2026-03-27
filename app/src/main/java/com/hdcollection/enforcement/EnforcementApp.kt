@@ -10,6 +10,7 @@ import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.logging.FileLoggingTree
 import com.hdcollection.enforcement.notification.PlatformNotificationService
 import com.hdcollection.enforcement.service.UploadWorker
+import com.hdcollection.enforcement.sip.SipManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -24,6 +25,9 @@ class EnforcementApp : Application() {
         private set
 
     lateinit var notificationService: PlatformNotificationService
+        private set
+
+    lateinit var sipManager: SipManager
         private set
 
     override fun onCreate() {
@@ -42,8 +46,14 @@ class EnforcementApp : Application() {
 
         Timber.i("EnforcementApp started, log file: ${logFile.absolutePath}")
 
-        // 初始化 SignalR 平台通知
+        // 初始化 SIP 对讲
         val settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
+        sipManager = SipManager(settings)
+        CoroutineScope(Dispatchers.IO).launch {
+            sipManager.start()
+        }
+
+        // 初始化 SignalR 平台通知
         notificationService = PlatformNotificationService(this, settings)
         CoroutineScope(Dispatchers.IO).launch {
             notificationService.connect()
