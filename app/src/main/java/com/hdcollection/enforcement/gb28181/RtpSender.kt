@@ -22,9 +22,14 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
         Timber.i("RtpSender: SSRC set to $ssrc (0x${Integer.toHexString(ssrc)})")
     }
 
+    private var packetCount = 0L
+    private var byteCount = 0L
+
     fun start() {
         socket = DatagramSocket()
-        Timber.i("RtpSender: started target=$targetIp:$targetPort ssrc=$ssrc")
+        packetCount = 0
+        byteCount = 0
+        Timber.i("RtpSender: started target=$targetIp:$targetPort ssrc=$ssrc localPort=${socket?.localPort}")
     }
 
     fun sendVideoFrame(encodedData: ByteArray, timestampMs: Long, isKeyFrame: Boolean = false) {
@@ -81,6 +86,11 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
 
             System.arraycopy(data, offset, rtp, 12, chunkSize)
             sock.send(DatagramPacket(rtp, rtp.size, addr, targetPort))
+            packetCount++
+            byteCount += rtp.size
+            if (packetCount % 200 == 1L) {
+                Timber.i("RtpSender: sent $packetCount pkts, ${byteCount/1024}KB → $targetIp:$targetPort")
+            }
 
             offset += chunkSize
             sequenceNumber = (sequenceNumber + 1) and 0xFFFF
