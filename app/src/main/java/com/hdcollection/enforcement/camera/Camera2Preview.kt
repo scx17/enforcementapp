@@ -181,6 +181,8 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
     }
 
     private fun startEncoderOutputLoop() {
+        var spsPps: ByteArray? = null  // 缓存 SPS/PPS，拼接到每个 IDR 帧前
+
         encoderThread = Thread {
             val bufferInfo = MediaCodec.BufferInfo()
             while (isEncoding) {
@@ -193,9 +195,25 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
                         buffer.get(data)
                         codec.releaseOutputBuffer(index, false)
 
+                        // CODEC_CONFIG 帧包含 SPS/PPS，缓存它
+                        if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                            spsPps = data.copyOf()
+                            Timber.i("Encoder: SPS/PPS cached, ${data.size} bytes")
+                            continue  // 不直接发送，后续拼到 IDR 前
+                        }
+
                         val isKeyFrame = bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
-                        rtpSender?.sendVideoFrame(data, bufferInfo.presentationTimeUs / 1000, isKeyFrame)
-                        Timber.v("RTP frame sent: ${data.size} bytes, keyframe=$isKeyFrame")
+
+                        // IDR 帧前拼接 SPS/PPS
+                        val frameData = if (isKeyFrame && spsPps != null) {
+                            Timber.d("Encoder: prepending SPS/PPS (${spsPps!!.size}B) to IDR (${data.size}B)")
+                            spsPps!! + data
+                        } else {
+                            data
+                        }
+
+                        rtpSender?.sendVideoFrame(frameData, bufferInfo.presentationTimeUs / 1000, isKeyFrame)
+                        Timber.v("RTP frame sent: ${frameData.size} bytes, keyframe=$isKeyFrame")
                     }
                 } catch (e: Exception) {
                     if (isEncoding) Timber.e(e, "Encoder output error")
