@@ -200,8 +200,8 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
         // Start code: 00 00 01 BC
         out.write(0x00); out.write(0x00); out.write(0x01); out.write(0xBC)
 
-        // program_stream_map_length = 12 (仅视频，无音频)
-        out.write(0x00); out.write(0x0C)
+        // program_stream_map_length = 14 (2+2+2+4+4 = current_next+reserved + ps_info_len + es_map_len + 1 video stream + CRC32)
+        out.write(0x00); out.write(0x0E)
 
         // current_next_indicator(1)=1 + reserved(2)=11 + program_stream_map_version(5)=0
         out.write(0xE0)
