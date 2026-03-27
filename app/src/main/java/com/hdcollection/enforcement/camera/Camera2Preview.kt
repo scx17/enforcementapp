@@ -127,7 +127,7 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
         }
     }
 
-    fun startEncoding(rtpIp: String, rtpPort: Int) {
+    fun startEncoding(rtpIp: String, rtpPort: Int, ssrc: Int = 0) {
         if (isEncoding) return
         val camera = cameraDevice ?: run {
             Timber.w("Camera not open, cannot start encoding")
@@ -149,8 +149,9 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
             codec.start()
             mediaCodec = codec
 
-            // 启动 RTP 发送
+            // 启动 RTP 发送（使用 SDP 指定的 SSRC）
             val sender = RtpSender(rtpIp, rtpPort)
+            if (ssrc != 0) sender.setSsrc(ssrc)
             sender.start()
             rtpSender = sender
 

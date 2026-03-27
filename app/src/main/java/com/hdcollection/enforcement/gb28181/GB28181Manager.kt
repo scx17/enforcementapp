@@ -113,15 +113,18 @@ class GB28181Manager(
         val rtpIp = extractSdpConnection(message) ?: settings.sipServer
         val rtpPort = extractSdpMediaPort(message) ?: 10000
 
-        val rtpSender = RtpSender(rtpIp, rtpPort)
+        // 从 SDP y= 字段解析 SSRC（WVP-PRO/ZLM 要求 SSRC 匹配）
+        val sdpSsrc = extractSdpSsrc(message)
+        Timber.i("GB28181: INVITE SDP -> IP=$rtpIp, Port=$rtpPort, SSRC=$sdpSsrc")
+
         val ok = SipMessage.buildInviteOk(
             callIdHeader, fromHeader, toHeader, cseqHeader,
-            localIp, localPort, rtpSender.getSsrc()
+            localIp, localPort, sdpSsrc?.let { String.format("%010d", it.toLong()) } ?: "0000000000"
         )
         sendUdp(ok)
 
-        Timber.i("GB28181: INVITE accepted, streaming to $rtpIp:$rtpPort")
-        callback.onStreamStartRequested(callIdHeader, rtpIp, rtpPort)
+        Timber.i("GB28181: INVITE accepted, streaming to $rtpIp:$rtpPort ssrc=$sdpSsrc")
+        callback.onStreamStartRequested(callIdHeader, rtpIp, rtpPort, sdpSsrc ?: 0)
     }
 
     private fun startKeepAlive() {
@@ -172,6 +175,17 @@ class GB28181Manager(
 
     private fun extractSdpMediaPort(message: String): Int? {
         return Regex("""m=video (\d+)""").find(message)?.groupValues?.get(1)?.toIntOrNull()
+    }
+
+    private fun extractSdpSsrc(message: String): Int? {
+        // GB28181 SDP 中 y= 字段是 10 位 SSRC（十进制字符串）
+        val ssrcStr = Regex("""y=(\d{10})""").find(message)?.groupValues?.get(1)
+        if (ssrcStr != null) {
+            return ssrcStr.toLongOrNull()?.toInt()
+        }
+        // 兼容 ssrc= 格式
+        val ssrcStr2 = Regex("""ssrc=(\d+)""", RegexOption.IGNORE_CASE).find(message)?.groupValues?.get(1)
+        return ssrcStr2?.toLongOrNull()?.toInt()
     }
 
     fun unregister() {

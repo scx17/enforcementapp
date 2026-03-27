@@ -193,10 +193,10 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         runOnUiThread { updateStreamStatus("断网", "#F44336") }
     }
 
-    override fun onStreamStartRequested(channelId: String, rtpIp: String, rtpPort: Int) {
-        Timber.i("Stream start requested: $channelId -> $rtpIp:$rtpPort")
+    override fun onStreamStartRequested(channelId: String, rtpIp: String, rtpPort: Int, ssrc: Int) {
+        Timber.i("Stream start requested: $channelId -> $rtpIp:$rtpPort ssrc=$ssrc")
         runOnUiThread { updateStreamStatus("推流中", "#2196F3") }
-        camera.startEncoding(rtpIp, rtpPort)
+        camera.startEncoding(rtpIp, rtpPort, ssrc)
     }
 
     override fun onStreamStopRequested(channelId: String) {
