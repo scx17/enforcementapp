@@ -200,18 +200,23 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     private fun updateCameraWatermark(now: Date) {
         try {
             val dm = android.app.devicemanager.DeviceManager.getInstance()
+            if (dm == null) {
+                if (!watermarkEnabled) { Timber.w("DeviceManager 为 null，水印不可用"); watermarkEnabled = true }
+                return
+            }
             if (!watermarkEnabled) {
                 dm.setCameraWaterMarkEnable(true)
                 watermarkEnabled = true
-                Timber.i("摄像头水印已开启")
+                Timber.i("摄像头硬件水印已开启")
             }
-            // 第 1 行：时间戳
             val timeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
             dm.setCameraWaterMarkText(0, timeFmt.format(now))
-            // 第 2 行：设备编码
             dm.setCameraWaterMarkText(1, settings.deviceId)
         } catch (e: Exception) {
-            // DeviceManager 不可用时静默忽略（非执法仪设备）
+            if (!watermarkEnabled) {
+                Timber.w(e, "硬件水印不可用: ${e.message}")
+                watermarkEnabled = true // 只报一次
+            }
         }
     }
 
