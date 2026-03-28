@@ -174,12 +174,15 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         gb28181Manager.register()
     }
 
+    private var watermarkEnabled = false
+
     private fun updateClock() {
+        val now = Date()
         val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-        findViewById<TextView>(R.id.tvTime).text = sdf.format(Date())
+        findViewById<TextView>(R.id.tvTime).text = sdf.format(now)
 
         val dateSdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        findViewById<TextView>(R.id.tvDate).text = dateSdf.format(Date())
+        findViewById<TextView>(R.id.tvDate).text = dateSdf.format(now)
 
         // 更新 GPS 信息
         val locService = (application as EnforcementApp).locationService
@@ -189,6 +192,27 @@ class MainActivity : AppCompatActivity(), StreamCallback {
             "定位中..."
         }
         findViewById<TextView>(R.id.tvGps)?.text = gpsText
+
+        // 更新摄像头画面水印（硬件 OSD，直接烧录到视频帧中）
+        updateCameraWatermark(now)
+    }
+
+    private fun updateCameraWatermark(now: Date) {
+        try {
+            val dm = android.app.devicemanager.DeviceManager.getInstance()
+            if (!watermarkEnabled) {
+                dm.setCameraWaterMarkEnable(true)
+                watermarkEnabled = true
+                Timber.i("摄像头水印已开启")
+            }
+            // 第 1 行：时间戳
+            val timeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+            dm.setCameraWaterMarkText(0, timeFmt.format(now))
+            // 第 2 行：设备编码
+            dm.setCameraWaterMarkText(1, settings.deviceId)
+        } catch (e: Exception) {
+            // DeviceManager 不可用时静默忽略（非执法仪设备）
+        }
     }
 
     private fun updateDeviceInfo() {
