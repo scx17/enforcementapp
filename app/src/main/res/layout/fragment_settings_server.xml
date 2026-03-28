@@ -59,7 +59,7 @@
         <TextView android:text="SIP 密码" android:textColor="#CCCCCC" android:textSize="13sp"
             android:layout_width="wrap_content" android:layout_height="wrap_content" />
         <EditText android:id="@+id/etSipPassword" android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:text="admin123" android:inputType="textPassword" android:textColor="#FFFFFF" android:textColorHint="#666666"
+            android:text="admin123" android:inputType="textVisiblePassword" android:textColor="#FFFFFF" android:textColorHint="#666666"
             android:background="#2A2A3E" android:padding="8dp" android:layout_marginBottom="10dp" />
 
         <!-- 分隔线 -->
