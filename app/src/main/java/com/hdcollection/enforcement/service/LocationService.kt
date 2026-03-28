@@ -6,6 +6,8 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Bundle
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import timber.log.Timber
 
 /**
@@ -96,9 +98,57 @@ class LocationService(private val context: Context) {
         } else {
             Timber.w("网络定位未启用")
         }
+
+        // 定期上报位置到平台
+        startReporting()
+    }
+
+    private var reportTimer: java.util.Timer? = null
+
+    private fun startReporting() {
+        val settings = com.hdcollection.enforcement.data.AppSettings(
+            context.getSharedPreferences("app_settings", 0)
+        )
+        val apiUrl = settings.platformApiUrl
+        val deviceId = settings.deviceId
+        if (apiUrl.isBlank() || deviceId.isBlank()) {
+            Timber.w("位置上报跳过: 平台地址或设备ID未配置")
+            return
+        }
+
+        reportTimer = java.util.Timer()
+        reportTimer?.scheduleAtFixedRate(object : java.util.TimerTask() {
+            override fun run() {
+                val loc = currentLocation ?: return
+                try {
+                    val client = okhttp3.OkHttpClient.Builder()
+                        .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                        .build()
+                    val json = com.google.gson.JsonObject().apply {
+                        addProperty("deviceId", deviceId)
+                        addProperty("longitude", loc.longitude)
+                        addProperty("latitude", loc.latitude)
+                        addProperty("accuracy", loc.accuracy)
+                        addProperty("provider", loc.provider ?: "unknown")
+                    }
+                    val mediaType = "application/json".toMediaType()
+                    val body = json.toString().toRequestBody(mediaType)
+                    val request = okhttp3.Request.Builder()
+                        .url("$apiUrl/api/map/report-location")
+                        .post(body)
+                        .build()
+                    client.newCall(request).execute().close()
+                    Timber.d("位置已上报: ${loc.latitude}, ${loc.longitude}")
+                } catch (e: Exception) {
+                    Timber.d("位置上报失败: ${e.message}")
+                }
+            }
+        }, 10_000, 30_000) // 10秒后首次上报，每30秒一次
     }
 
     fun stop() {
+        reportTimer?.cancel()
+        reportTimer = null
         locationManager.removeUpdates(gpsListener)
         locationManager.removeUpdates(networkListener)
         Timber.i("定位服务已停止")
