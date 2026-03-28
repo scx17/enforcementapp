@@ -99,23 +99,39 @@ class GB28181Manager(
             message.startsWith("BYE") -> {
                 val callIdHeader = SipMessage.extractHeader(message, "Call-ID") ?: ""
                 Timber.i("GB28181: BYE received, stopping stream")
+                currentCallId = null
                 callback.onStreamStopRequested(callIdHeader)
                 sendUdp(SipMessage.buildBye(callIdHeader))
             }
         }
     }
 
+    private var currentCallId: String? = null
+
     private fun handleInvite(message: String) {
         val callIdHeader = SipMessage.extractHeader(message, "Call-ID") ?: return
+
+        // 忽略重复的 INVITE（同一个 Call-ID 的重传）
+        if (callIdHeader == currentCallId) {
+            Timber.d("GB28181: 忽略重复 INVITE, CallID=$callIdHeader")
+            return
+        }
+
         val fromHeader = SipMessage.extractHeader(message, "From") ?: return
         val toHeader = SipMessage.extractHeader(message, "To") ?: return
         val cseqHeader = SipMessage.extractHeader(message, "CSeq") ?: return
+
+        // 如果正在推流，先停掉旧的
+        if (currentCallId != null) {
+            Timber.i("GB28181: 停止旧推流, 旧CallID=$currentCallId")
+            callback.onStreamStopRequested(currentCallId!!)
+        }
 
         // 从 SDP 解析 RTP 目标地址和端口
         val rtpIp = extractSdpConnection(message) ?: settings.sipServer
         val rtpPort = extractSdpMediaPort(message) ?: 10000
 
-        // 从 SDP y= 字段解析 SSRC（WVP-PRO/ZLM 要求 SSRC 匹配）
+        // 从 SDP y= 字段解析 SSRC
         val sdpSsrc = extractSdpSsrc(message)
         Timber.i("GB28181: INVITE SDP -> IP=$rtpIp, Port=$rtpPort, SSRC=$sdpSsrc")
 
@@ -125,6 +141,7 @@ class GB28181Manager(
         )
         sendUdp(ok)
 
+        currentCallId = callIdHeader
         Timber.i("GB28181: INVITE accepted, streaming to $rtpIp:$rtpPort ssrc=$sdpSsrc")
         callback.onStreamStartRequested(callIdHeader, rtpIp, rtpPort, sdpSsrc ?: 0)
     }
