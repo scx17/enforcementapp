@@ -26,10 +26,12 @@ class GB28181Manager(
         scope.launch {
             try {
                 localIp = getLocalIp()
-                // 绑定到 IPv4 wildcard 0.0.0.0，确保接收所有 IPv4 UDP 包
-                udpSocket = DatagramSocket(null)
-                udpSocket!!.reuseAddress = true
-                udpSocket!!.bind(java.net.InetSocketAddress("0.0.0.0", localPort))
+                // 强制使用 IPv4
+                System.setProperty("java.net.preferIPv4Stack", "true")
+                // 绑定到设备的 WiFi IPv4 地址
+                val bindAddr = java.net.Inet4Address.getByName(localIp)
+                udpSocket = DatagramSocket(localPort, bindAddr)
+                Timber.i("GB28181: socket bound to $localIp:$localPort (${udpSocket!!.localAddress})")
                 Timber.i("GB28181: registering ${settings.deviceId} to ${settings.sipServer}:${settings.sipPort}")
 
                 startListening()
