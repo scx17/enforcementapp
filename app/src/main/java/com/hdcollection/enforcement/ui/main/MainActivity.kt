@@ -35,6 +35,9 @@ import com.hdcollection.enforcement.ui.LightPanelFragment
 import com.hdcollection.enforcement.ui.function.FunctionActivity
 import com.hdcollection.enforcement.ui.playback.PlaybackActivity
 import com.hdcollection.enforcement.ui.settings.SettingsActivity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import timber.log.Timber
 import java.io.File
 import java.text.SimpleDateFormat
@@ -49,6 +52,7 @@ class MainActivity : AppCompatActivity(), StreamCallback {
 
     private var isRecording = false
     private var isFlashOn = false
+    private var currentRecordFile: File? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private val hardwareKeyReceiver = HardwareKeyReceiver()
 
@@ -392,14 +396,60 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         if (now - lastRecordingToggleTime < DEBOUNCE_MS) return
         lastRecordingToggleTime = now
         if (isRecording) {
+            // 先保存文件引用（stopLocalRecording 后 camera 内部引用会被清除）
+            val recordFile = currentRecordFile
+            val startTime = recordingStartTime
+
             camera.stopLocalRecording()
             isRecording = false
+            currentRecordFile = null
             playVoice(R.raw.voice_stop_recording)
             showRecordingIndicator(false)
             Timber.i("Local recording stopped")
+
+            // 将录像文件加入上传队列
+            if (recordFile != null && recordFile.exists()) {
+                val app = application as EnforcementApp
+                val locService = app.locationService
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        val uploadService = com.hdcollection.enforcement.upload.UploadService(
+                            com.hdcollection.enforcement.data.db.AppDatabase.getInstance(applicationContext).uploadQueueDao(),
+                            com.hdcollection.enforcement.data.AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE)),
+                            okhttp3.OkHttpClient()
+                        )
+                        uploadService.enqueue(
+                            deviceId = settings.deviceId,
+                            fileType = "video",
+                            file = recordFile,
+                            lat = locService.getLatitude().takeIf { it != 0.0 },
+                            lng = locService.getLongitude().takeIf { it != 0.0 },
+                            recordTime = startTime
+                        )
+                        Timber.i("录像已加入上传队列: ${recordFile.name}, ${recordFile.length() / 1024}KB")
+                    } catch (e: Exception) {
+                        Timber.e(e, "录像入队失败")
+                    }
+                }
+
+                // 触发 WorkManager 立即执行上传任务
+                androidx.work.WorkManager.getInstance(applicationContext)
+                    .enqueueUniqueWork(
+                        "auto_upload",
+                        androidx.work.ExistingWorkPolicy.REPLACE,
+                        androidx.work.OneTimeWorkRequestBuilder<com.hdcollection.enforcement.service.UploadWorker>()
+                            .setConstraints(
+                                androidx.work.Constraints.Builder()
+                                    .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                                    .build()
+                            )
+                            .build()
+                    )
+            }
         } else {
             val dir = getExternalFilesDir("recordings") ?: filesDir
             val file = File(dir, "rec_${System.currentTimeMillis()}.mp4")
+            currentRecordFile = file
             camera.startLocalRecording(file)
             isRecording = true
             recordingStartTime = System.currentTimeMillis()
