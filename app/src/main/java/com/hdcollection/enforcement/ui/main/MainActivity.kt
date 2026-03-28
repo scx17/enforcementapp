@@ -4,12 +4,16 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.hardware.camera2.CameraManager
+import android.media.MediaActionSound
+import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.view.KeyEvent
 import android.view.SurfaceView
+import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.ImageButton
@@ -24,6 +28,9 @@ import com.hdcollection.enforcement.camera.Camera2Preview
 import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.gb28181.GB28181Manager
 import com.hdcollection.enforcement.gb28181.StreamCallback
+import com.hdcollection.enforcement.hardware.DeviceHardwareManager
+import com.hdcollection.enforcement.hardware.HardwareKeyReceiver
+import com.hdcollection.enforcement.hardware.LightState
 import com.hdcollection.enforcement.ui.LightPanelFragment
 import com.hdcollection.enforcement.ui.function.FunctionActivity
 import com.hdcollection.enforcement.ui.playback.PlaybackActivity
@@ -41,7 +48,30 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     private lateinit var camera: Camera2Preview
 
     private var isRecording = false
+    private var isFlashOn = false
     private var wakeLock: PowerManager.WakeLock? = null
+    private val hardwareKeyReceiver = HardwareKeyReceiver()
+
+    // 语音提示播放器
+    private var voicePlayer: MediaPlayer? = null
+
+    // 系统快门音
+    private val shutterSound = MediaActionSound()
+
+    // 按键防抖：设备同时发 KeyEvent + 广播，防止同一操作触发两次
+    private var lastRecordingToggleTime = 0L
+    private var lastPhotoTime = 0L
+    private val DEBOUNCE_MS = 800L
+
+    // 录像计时
+    private var recordingStartTime = 0L
+    private val recordingTimerHandler = Handler(Looper.getMainLooper())
+    private val recordingTimerRunnable = object : Runnable {
+        override fun run() {
+            updateRecordingTimer()
+            recordingTimerHandler.postDelayed(this, 1000)
+        }
+    }
 
     private val clockHandler = Handler(Looper.getMainLooper())
     private val clockRunnable = object : Runnable {
@@ -73,9 +103,15 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         val surfaceView = findViewById<SurfaceView>(R.id.surfacePreview)
         camera = Camera2Preview(this, surfaceView)
 
+        // 预加载快门音
+        shutterSound.load(MediaActionSound.SHUTTER_CLICK)
+
         setupBottomButtons()
         updateDeviceInfo()
         updateStreamStatus("初始化", "#9E9E9E")
+
+        // 录像指示器默认隐藏
+        findViewById<TextView>(R.id.tvRecordingIndicator).visibility = View.GONE
 
         if (hasRequiredPermissions()) {
             startGB28181()
@@ -87,6 +123,9 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         (application as EnforcementApp).sipManager.onIncomingCall = { call ->
             runOnUiThread { showIncomingCallDialog(call) }
         }
+
+        // 注册硬件按键广播接收器
+        registerHardwareKeyReceiver()
     }
 
     override fun onResume() {
@@ -102,6 +141,10 @@ class MainActivity : AppCompatActivity(), StreamCallback {
 
     override fun onDestroy() {
         super.onDestroy()
+        try { unregisterReceiver(hardwareKeyReceiver) } catch (_: Exception) {}
+        recordingTimerHandler.removeCallbacks(recordingTimerRunnable)
+        voicePlayer?.release()
+        shutterSound.release()
         gb28181Manager.unregister()
         wakeLock?.let { if (it.isHeld) it.release() }
     }
@@ -207,18 +250,15 @@ class MainActivity : AppCompatActivity(), StreamCallback {
 
     override fun onIntercomReceived(callerInfo: String) {
         Timber.i("Intercom received from: $callerInfo")
-        // SIP 对讲 UI 在 Task 17 实现
     }
 
     // 物理按键绑定（DSJ-Z6 执法仪）
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         return when (keyCode) {
-            // 录像键：KEYCODE_CAMERA 或执法仪自定义键码 293
             KeyEvent.KEYCODE_CAMERA, 293 -> {
                 toggleLocalRecording()
                 true
             }
-            // 截图键：KEYCODE_FOCUS 或执法仪自定义键码 294
             KeyEvent.KEYCODE_FOCUS, 294 -> {
                 capturePhoto()
                 true
@@ -227,30 +267,138 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         }
     }
 
+    private fun registerHardwareKeyReceiver() {
+        hardwareKeyReceiver.onKeyAction = { action ->
+            runOnUiThread { handleHardwareKey(action) }
+        }
+        registerReceiver(hardwareKeyReceiver, HardwareKeyReceiver.createIntentFilter())
+        Timber.i("Hardware key receiver registered")
+    }
+
+    private fun handleHardwareKey(action: HardwareKeyReceiver.KeyAction) {
+        when (action) {
+            HardwareKeyReceiver.KeyAction.VIDEO_PRESS -> toggleLocalRecording()
+            HardwareKeyReceiver.KeyAction.VIDEO_LONG_PRESS -> toggleLocalRecording()
+            HardwareKeyReceiver.KeyAction.PHOTO_PRESS -> capturePhoto()
+            HardwareKeyReceiver.KeyAction.PHOTO_LONG_PRESS -> capturePhoto()
+            HardwareKeyReceiver.KeyAction.PHOTO_LONG_PRESS_CANCELED -> {}
+            HardwareKeyReceiver.KeyAction.SOS_PRESS -> toggleFlashLight()
+            HardwareKeyReceiver.KeyAction.SOS_LONG_PRESS -> {
+                LightState.strobeRedBlueOn = true
+                DeviceHardwareManager.setStrobeRedBlueBlink()
+                Timber.i("SOS: strobe red-blue blink activated")
+            }
+            HardwareKeyReceiver.KeyAction.PTT_DOWN -> {
+                val sipManager = (application as EnforcementApp).sipManager
+                if (!sipManager.isInCall()) {
+                    val targetUri = "sip:commander@${settings.sipServer}"
+                    sipManager.makeCall(targetUri)
+                    Timber.i("PTT: calling $targetUri")
+                }
+            }
+            HardwareKeyReceiver.KeyAction.PTT_UP -> {
+                val sipManager = (application as EnforcementApp).sipManager
+                if (sipManager.isInCall()) {
+                    sipManager.hangup()
+                    Timber.i("PTT: call ended")
+                }
+            }
+            HardwareKeyReceiver.KeyAction.MARK_PRESS -> {
+                Timber.i("Mark key pressed: timestamp=${System.currentTimeMillis()}")
+            }
+            HardwareKeyReceiver.KeyAction.MARK_LONG_PRESS -> showLightPanel()
+            HardwareKeyReceiver.KeyAction.RECORD_PRESS -> Timber.i("Record key pressed")
+            HardwareKeyReceiver.KeyAction.RECORD_LONG_PRESS -> Timber.i("Record key long pressed")
+            HardwareKeyReceiver.KeyAction.FN_PRESS -> startActivity(Intent(this, FunctionActivity::class.java))
+            HardwareKeyReceiver.KeyAction.FN_LONG_PRESS -> startActivity(Intent(this, SettingsActivity::class.java))
+        }
+    }
+
+    private fun toggleFlashLight() {
+        isFlashOn = !isFlashOn
+        LightState.flashOn = isFlashOn
+        val hw = DeviceHardwareManager
+        if (hw.isAvailable()) {
+            hw.setFlashLight(isFlashOn)
+        } else {
+            try {
+                val cameraManager = getSystemService(CameraManager::class.java)
+                val cameraId = cameraManager.cameraIdList.firstOrNull() ?: return
+                cameraManager.setTorchMode(cameraId, isFlashOn)
+            } catch (e: Exception) {
+                Timber.e(e, "toggleFlashLight failed")
+            }
+        }
+        Timber.i("Flash light toggled: $isFlashOn")
+    }
+
+    private fun playVoice(resId: Int) {
+        voicePlayer?.release()
+        voicePlayer = MediaPlayer.create(this, resId)?.apply {
+            setOnCompletionListener { it.release() }
+            start()
+        }
+    }
+
     private fun showLightPanel() {
         LightPanelFragment().show(supportFragmentManager, "light_panel")
     }
 
     private fun toggleLocalRecording() {
+        val now = System.currentTimeMillis()
+        if (now - lastRecordingToggleTime < DEBOUNCE_MS) return
+        lastRecordingToggleTime = now
         if (isRecording) {
             camera.stopLocalRecording()
             isRecording = false
+            playVoice(R.raw.voice_stop_recording)
+            showRecordingIndicator(false)
             Timber.i("Local recording stopped")
         } else {
             val dir = getExternalFilesDir("recordings") ?: filesDir
             val file = File(dir, "rec_${System.currentTimeMillis()}.mp4")
             camera.startLocalRecording(file)
             isRecording = true
+            recordingStartTime = System.currentTimeMillis()
+            playVoice(R.raw.voice_start_recording)
+            showRecordingIndicator(true)
             Timber.i("Local recording started: ${file.name}")
         }
     }
 
+    private fun showRecordingIndicator(show: Boolean) {
+        val indicator = findViewById<TextView>(R.id.tvRecordingIndicator)
+        if (show) {
+            indicator.visibility = View.VISIBLE
+            recordingTimerHandler.post(recordingTimerRunnable)
+        } else {
+            indicator.visibility = View.GONE
+            recordingTimerHandler.removeCallbacks(recordingTimerRunnable)
+        }
+    }
+
+    private fun updateRecordingTimer() {
+        val indicator = findViewById<TextView>(R.id.tvRecordingIndicator)
+        val elapsed = (System.currentTimeMillis() - recordingStartTime) / 1000
+        val min = elapsed / 60
+        val sec = elapsed % 60
+        indicator.text = String.format("● REC %02d:%02d", min, sec)
+        // 闪烁红点效果
+        val alpha = if ((elapsed % 2) == 0L) 1.0f else 0.6f
+        indicator.alpha = alpha
+    }
+
     private fun capturePhoto() {
+        val now = System.currentTimeMillis()
+        if (now - lastPhotoTime < DEBOUNCE_MS) return
+        lastPhotoTime = now
         val dir = getExternalFilesDir("photos") ?: filesDir
         val file = File(dir, "photo_${System.currentTimeMillis()}.jpg")
+        // 播放快门声
+        shutterSound.play(MediaActionSound.SHUTTER_CLICK)
         camera.capturePhoto(file) { savedFile ->
             Timber.i("Photo captured: ${savedFile.name}")
-            // 上传队列在 Task 15 实现
+            runOnUiThread { playVoice(R.raw.voice_photo_taken) }
         }
     }
 

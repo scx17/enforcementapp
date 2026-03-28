@@ -73,7 +73,7 @@
             android:layout_height="wrap_content" />
     </LinearLayout>
 
-    <!-- 爆闪灯 -->
+    <!-- 红蓝爆闪灯 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="48dp"
@@ -83,11 +83,49 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="爆闪灯"
+            android:text="红蓝爆闪"
             android:textColor="#FFFFFF"
             android:textSize="14sp" />
         <androidx.appcompat.widget.SwitchCompat
             android:id="@+id/switchStrobe"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content" />
+    </LinearLayout>
+
+    <!-- 红色警示灯 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="红色警示灯"
+            android:textColor="#FF5252"
+            android:textSize="14sp" />
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/switchRedStrobe"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content" />
+    </LinearLayout>
+
+    <!-- 蓝色警示灯 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="蓝色警示灯"
+            android:textColor="#448AFF"
+            android:textSize="14sp" />
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/switchBlueStrobe"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content" />
     </LinearLayout>

@@ -76,14 +76,22 @@ class ServerSettingsFragment : Fragment() {
                     val sipPassword = data.get("sipPassword").asString
                     val deviceIdPrefix = data.get("deviceIdPrefix").asString
 
-                    // 从设备序列号生成设备编码
+                    // 通过 DeviceManager.getSn() 获取设备唯一 SN 号
+                    val sn = try {
+                        val dm = android.app.devicemanager.DeviceManager.getInstance()
+                        dm.sn?.takeIf { it.isNotBlank() } ?: dm.deviceSN?.takeIf { it.isNotBlank() }
+                    } catch (e: Exception) {
+                        null
+                    }
+                    // fallback: Build.SERIAL
                     @Suppress("DEPRECATION")
-                    val serialNumber = android.os.Build.SERIAL.let {
+                    val serialNumber = sn ?: android.os.Build.SERIAL.let {
                         if (it == "unknown" || it.isBlank()) android.os.Build.DEVICE else it
                     }
-                    // 取序列号后7位数字，不足补0
+                    // 取 SN 后7位数字，不足补0，拼接前缀生成20位 GB28181 设备编码
                     val suffix = serialNumber.filter { it.isDigit() }.takeLast(7).padStart(7, '0')
                     val deviceId = deviceIdPrefix + suffix
+                    timber.log.Timber.i("设备SN=$serialNumber, 生成编码=$deviceId")
 
                     // 保存所有配置
                     settings.sipServer = sipServer
