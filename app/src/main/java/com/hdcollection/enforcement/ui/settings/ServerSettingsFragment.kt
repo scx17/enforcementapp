@@ -23,11 +23,11 @@ class ServerSettingsFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         settings = AppSettings(requireContext().getSharedPreferences("app_settings", 0))
 
-        // 加载已保存的值，未保存则显示默认值
+        // 加载已保存的值，未保存则用默认值
         binding.etApiUrl.setText(settings.platformApiUrl.ifEmpty { "http://192.168.5.110:5004" })
         binding.etSipServer.setText(settings.sipServer.ifEmpty { "" })
         binding.etSipPort.setText(settings.sipPort.ifEmpty { "5060" })
-        binding.etSipUsername.setText(settings.sipUsername.ifEmpty { "" })
+        binding.etSipUsername.setText(settings.sipUsername.ifEmpty { generateDeviceId() })
         binding.etSipPassword.setText(settings.sipPassword.ifEmpty { "admin123" })
         binding.etLogInterval.setText(settings.logUploadInterval.toString())
 
@@ -118,6 +118,17 @@ class ServerSettingsFragment : Fragment() {
             if (username.isNotEmpty()) settings.deviceId = username
             Toast.makeText(context, "配置已保存", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    /** 通过 IMEI 生成 20 位 GB28181 设备编码 */
+    private fun generateDeviceId(): String {
+        val prefix = "4401020049132" // 13 位前缀
+        val imei = try {
+            val dm = android.app.devicemanager.DeviceManager.getInstance()
+            dm.imei?.takeIf { it.isNotBlank() }
+        } catch (_: Exception) { null }
+        val suffix = (imei ?: "0000000").filter { it.isDigit() }.takeLast(7).padStart(7, '0')
+        return prefix + suffix
     }
 
     override fun onDestroyView() { super.onDestroyView(); _binding = null }
