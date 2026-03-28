@@ -148,7 +148,7 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, 1920, 1080).apply {
                 setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000)
                 setInteger(MediaFormat.KEY_FRAME_RATE, 25)
-                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)  // 1秒关键帧间隔，降低延迟
                 setInteger(MediaFormat.KEY_COLOR_FORMAT,
                     MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             }
