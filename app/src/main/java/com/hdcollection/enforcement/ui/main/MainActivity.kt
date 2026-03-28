@@ -180,6 +180,15 @@ class MainActivity : AppCompatActivity(), StreamCallback {
 
         val dateSdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
         findViewById<TextView>(R.id.tvDate).text = dateSdf.format(Date())
+
+        // 更新 GPS 信息
+        val locService = (application as EnforcementApp).locationService
+        val gpsText = if (locService.getLatitude() != 0.0) {
+            String.format("%.6f, %.6f %s", locService.getLatitude(), locService.getLongitude(), locService.getProviderDesc())
+        } else {
+            "定位中..."
+        }
+        findViewById<TextView>(R.id.tvGps)?.text = gpsText
     }
 
     private fun updateDeviceInfo() {

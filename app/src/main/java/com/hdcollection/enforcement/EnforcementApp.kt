@@ -30,6 +30,9 @@ class EnforcementApp : Application() {
     lateinit var sipManager: SipManager
         private set
 
+    lateinit var locationService: com.hdcollection.enforcement.service.LocationService
+        private set
+
     override fun onCreate() {
         super.onCreate()
 
@@ -52,6 +55,10 @@ class EnforcementApp : Application() {
         CoroutineScope(Dispatchers.IO).launch {
             sipManager.start()
         }
+
+        // 初始化 GPS 定位
+        locationService = com.hdcollection.enforcement.service.LocationService(this)
+        locationService.start()
 
         // 初始化 SignalR 平台通知
         notificationService = PlatformNotificationService(this, settings)
