@@ -144,13 +144,23 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
         }
 
         try {
-            // 创建 MediaCodec H.264 编码器
+            // 创建 MediaCodec H.264 编码器（低延迟配置）
             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, 1920, 1080).apply {
                 setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000)
                 setInteger(MediaFormat.KEY_FRAME_RATE, 25)
-                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)  // 1秒关键帧间隔，降低延迟
+                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
                 setInteger(MediaFormat.KEY_COLOR_FORMAT,
                     MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                // 低延迟优化
+                setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+                setInteger(MediaFormat.KEY_COMPLEXITY, 0) // 最低复杂度，编码更快
+                try {
+                    setInteger(MediaFormat.KEY_LATENCY, 0) // API 30+ 低延迟
+                    setInteger("vendor.rtc-ext-enc-low-latency.enable", 1) // MTK 低延迟
+                } catch (_: Exception) {}
+                // H264 Baseline Profile 编码最快
+                setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+                setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel31)
             }
             val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
@@ -197,7 +207,7 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
             while (isEncoding) {
                 try {
                     val codec = mediaCodec ?: break
-                    val index = codec.dequeueOutputBuffer(bufferInfo, 10_000)
+                    val index = codec.dequeueOutputBuffer(bufferInfo, 1_000) // 1ms 超时，减少编码延迟
                     if (index >= 0) {
                         val buffer = codec.getOutputBuffer(index) ?: continue
                         val data = ByteArray(bufferInfo.size)
