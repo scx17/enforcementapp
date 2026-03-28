@@ -162,6 +162,11 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         findViewById<ImageButton>(R.id.btnFunction).setOnClickListener {
             startActivity(Intent(this, FunctionActivity::class.java))
         }
+        // 切换前后摄像头
+        findViewById<ImageButton>(R.id.btnSwitchCamera).setOnClickListener {
+            camera.switchCamera()
+            Timber.i("摄像头切换: front=${camera.isFrontCamera()}")
+        }
     }
 
     private fun startGB28181() {

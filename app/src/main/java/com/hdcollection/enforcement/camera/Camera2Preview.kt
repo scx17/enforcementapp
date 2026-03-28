@@ -39,6 +39,7 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
     private var mediaRecorder: MediaRecorder? = null
     private var isRecording = false
     private var currentRecordingFile: File? = null
+    private var useFrontCamera = false
 
     private var imageReader: ImageReader? = null
     private var photoCallback: ((File) -> Unit)? = null
@@ -63,7 +64,15 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
     private fun openCamera() {
         startBackgroundThread()
         val manager = activity.getSystemService(Activity.CAMERA_SERVICE) as CameraManager
-        val cameraId = manager.cameraIdList.firstOrNull() ?: return
+        val targetFacing = if (useFrontCamera)
+            android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT
+        else
+            android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
+        val cameraId = manager.cameraIdList.firstOrNull { id ->
+            val chars = manager.getCameraCharacteristics(id)
+            chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) == targetFacing
+        } ?: manager.cameraIdList.firstOrNull() ?: return
+        Timber.i("Opening camera: id=$cameraId, front=$useFrontCamera")
         try {
             manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
@@ -316,6 +325,16 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
         Timber.i("Local recording stopped: ${currentRecordingFile?.name}")
         currentRecordingFile = null
     }
+
+    /** 切换前置/后置摄像头 */
+    fun switchCamera() {
+        useFrontCamera = !useFrontCamera
+        Timber.i("切换摄像头: front=$useFrontCamera")
+        closeCamera()
+        openCamera()
+    }
+
+    fun isFrontCamera() = useFrontCamera
 
     private fun closeCamera() {
         stopEncoding()
