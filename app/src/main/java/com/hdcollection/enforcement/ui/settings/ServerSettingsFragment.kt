@@ -62,21 +62,19 @@ class ServerSettingsFragment : Fragment() {
                     val sipPassword = data.get("sipPassword").asString
                     val deviceIdPrefix = data.get("deviceIdPrefix").asString
 
-                    // 2. 通过 DeviceManager.getSn() 获取设备唯一 SN 号
-                    val sn = try {
+                    // 2. 通过 DeviceManager.getImei() 获取设备 IMEI
+                    val imei = try {
                         val dm = android.app.devicemanager.DeviceManager.getInstance()
-                        dm.sn?.takeIf { it.isNotBlank() } ?: dm.deviceSN?.takeIf { it.isNotBlank() }
+                        dm.imei?.takeIf { it.isNotBlank() }
                     } catch (e: Exception) {
-                        Timber.w(e, "DeviceManager.getSn() 不可用，使用 Build.SERIAL")
+                        Timber.w(e, "DeviceManager.getImei() 不可用")
                         null
                     }
-                    @Suppress("DEPRECATION")
-                    val serialNumber = sn ?: android.os.Build.SERIAL.let {
-                        if (it == "unknown" || it.isBlank()) android.os.Build.DEVICE else it
-                    }
-                    val suffix = serialNumber.filter { it.isDigit() }.takeLast(7).padStart(7, '0')
+                    // IMEI 通常 15 位数字，取后 7 位拼接设备编码前缀生成 20 位国标编码
+                    val imeiStr = imei ?: "0000000000000000"
+                    val suffix = imeiStr.filter { it.isDigit() }.takeLast(7).padStart(7, '0')
                     val deviceId = deviceIdPrefix + suffix
-                    Timber.i("自动配置: SN=$serialNumber, 设备编码=$deviceId")
+                    Timber.i("自动配置: IMEI=$imei, 设备编码=$deviceId")
 
                     // 3. 保存配置
                     settings.platformApiUrl = apiUrl
