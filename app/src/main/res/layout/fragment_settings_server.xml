@@ -9,77 +9,72 @@
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
-        <!-- 平台地址（必填，唯一需要手动输入的字段） -->
-        <TextView android:text="平台地址" android:textColor="#FFFFFF" android:textSize="16sp"
+        <!-- 平台地址 -->
+        <TextView android:text="平台 API 地址" android:textColor="#FFFFFF" android:textSize="14sp"
             android:textStyle="bold" android:layout_width="wrap_content" android:layout_height="wrap_content" />
-        <TextView android:text="输入平台地址后点击自动配置，即可自动获取所有 SIP 参数"
-            android:textColor="#888888" android:textSize="12sp"
-            android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:layout_marginBottom="8dp" />
         <EditText android:id="@+id/etApiUrl" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:hint="http://192.168.1.100:5004" android:textColor="#FFFFFF" android:textColorHint="#666666"
-            android:background="#2A2A3E" android:padding="8dp" android:layout_marginBottom="12dp"
+            android:background="#2A2A3E" android:padding="8dp" android:layout_marginBottom="8dp"
             android:inputType="textUri" />
 
         <Button android:id="@+id/btnAutoConfig"
             android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:text="自动配置" android:backgroundTint="#0D47A1" android:textColor="#FFFFFF"
+            android:text="从平台自动获取以下配置" android:backgroundTint="#0D47A1" android:textColor="#FFFFFF"
+            android:layout_marginBottom="4dp" />
+        <TextView android:text="输入平台地址后点击上方按钮可自动填充，也可手动修改以下参数连接其他平台"
+            android:textColor="#888888" android:textSize="11sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
             android:layout_marginBottom="16dp" />
 
-        <!-- 高级设置（可折叠） -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:layout_marginBottom="8dp">
-            <TextView android:id="@+id/tvAdvancedToggle"
-                android:text="▶ 高级设置（SIP 参数）" android:textColor="#AAAAAA" android:textSize="14sp"
-                android:layout_width="wrap_content" android:layout_height="wrap_content"
-                android:paddingTop="4dp" android:paddingBottom="4dp" />
-        </LinearLayout>
+        <!-- 分隔线 -->
+        <View android:layout_width="match_parent" android:layout_height="1dp"
+            android:background="#333355" android:layout_marginBottom="12dp" />
 
-        <LinearLayout android:id="@+id/layoutAdvanced"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:visibility="gone">
+        <!-- SIP 服务器地址 -->
+        <TextView android:text="SIP 服务器地址" android:textColor="#CCCCCC" android:textSize="13sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <EditText android:id="@+id/etSipServer" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="与平台同一IP" android:textColor="#FFFFFF" android:textColorHint="#666666"
+            android:background="#2A2A3E" android:padding="8dp" android:layout_marginBottom="10dp" />
 
-            <!-- SIP 服务器地址 -->
-            <TextView android:text="SIP 服务器地址" android:textColor="#AAAAAA" android:layout_width="wrap_content" android:layout_height="wrap_content" />
-            <EditText android:id="@+id/etSipServer" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:hint="192.168.1.100" android:textColor="#FFFFFF" android:textColorHint="#666666"
-                android:background="#2A2A3E" android:padding="8dp" android:layout_marginBottom="12dp" />
+        <!-- SIP 端口 -->
+        <TextView android:text="SIP 端口" android:textColor="#CCCCCC" android:textSize="13sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <EditText android:id="@+id/etSipPort" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="5060" android:inputType="number" android:textColor="#FFFFFF" android:textColorHint="#666666"
+            android:background="#2A2A3E" android:padding="8dp" android:layout_marginBottom="10dp" />
 
-            <!-- SIP 端口 -->
-            <TextView android:text="SIP 端口" android:textColor="#AAAAAA" android:layout_width="wrap_content" android:layout_height="wrap_content" />
-            <EditText android:id="@+id/etSipPort" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:hint="5060" android:inputType="number" android:textColor="#FFFFFF" android:textColorHint="#666666"
-                android:background="#2A2A3E" android:padding="8dp" android:layout_marginBottom="12dp" />
+        <!-- 设备编码 -->
+        <TextView android:text="设备编码（SIP 账号）" android:textColor="#CCCCCC" android:textSize="13sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:text="自动配置时根据设备 SN 生成，连接其他平台时可手动修改"
+            android:textColor="#666666" android:textSize="11sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp" />
+        <EditText android:id="@+id/etSipUsername" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="20位国标设备编码" android:textColor="#FFFFFF" android:textColorHint="#666666"
+            android:background="#2A2A3E" android:padding="8dp" android:layout_marginBottom="10dp" />
 
-            <!-- SIP 账号（设备编码） -->
-            <TextView android:text="SIP 账号（设备编码）" android:textColor="#AAAAAA" android:layout_width="wrap_content" android:layout_height="wrap_content" />
-            <EditText android:id="@+id/etSipUsername" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:hint="自动生成" android:textColor="#FFFFFF" android:textColorHint="#666666"
-                android:background="#2A2A3E" android:padding="8dp" android:layout_marginBottom="12dp" />
+        <!-- SIP 密码 -->
+        <TextView android:text="SIP 密码" android:textColor="#CCCCCC" android:textSize="13sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <EditText android:id="@+id/etSipPassword" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="admin123" android:inputType="textPassword" android:textColor="#FFFFFF" android:textColorHint="#666666"
+            android:background="#2A2A3E" android:padding="8dp" android:layout_marginBottom="10dp" />
 
-            <!-- SIP 密码 -->
-            <TextView android:text="SIP 密码" android:textColor="#AAAAAA" android:layout_width="wrap_content" android:layout_height="wrap_content" />
-            <EditText android:id="@+id/etSipPassword" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:hint="密码" android:inputType="textPassword" android:textColor="#FFFFFF" android:textColorHint="#666666"
-                android:background="#2A2A3E" android:padding="8dp" android:layout_marginBottom="12dp" />
+        <!-- 分隔线 -->
+        <View android:layout_width="match_parent" android:layout_height="1dp"
+            android:background="#333355" android:layout_marginBottom="12dp" />
 
-            <!-- 日志上传间隔 -->
-            <TextView android:text="日志上传间隔（分钟）" android:textColor="#AAAAAA" android:layout_width="wrap_content" android:layout_height="wrap_content" />
-            <EditText android:id="@+id/etLogInterval" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:hint="60" android:inputType="number" android:textColor="#FFFFFF" android:textColorHint="#666666"
-                android:background="#2A2A3E" android:padding="8dp" android:layout_marginBottom="12dp" />
-
-        </LinearLayout>
+        <!-- 日志上传间隔 -->
+        <TextView android:text="日志上传间隔（秒）" android:textColor="#CCCCCC" android:textSize="13sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <EditText android:id="@+id/etLogInterval" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="60" android:inputType="number" android:textColor="#FFFFFF" android:textColorHint="#666666"
+            android:background="#2A2A3E" android:padding="8dp" android:layout_marginBottom="16dp" />
 
         <Button android:id="@+id/btnSave"
             android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:text="保存" android:backgroundTint="#1A237E" android:textColor="#FFFFFF"
-            android:layout_marginTop="8dp" />
+            android:text="保存" android:backgroundTint="#1A237E" android:textColor="#FFFFFF" />
     </LinearLayout>
 </ScrollView>
