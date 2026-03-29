@@ -5,14 +5,19 @@ import java.io.ByteArrayOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.util.concurrent.ConcurrentLinkedQueue
 
 /**
  * GB28181 RTP 发送器
- * H.264 → PS (Program Stream) → RTP
+ * H.264 + AAC → PS (Program Stream) → RTP
+ *
+ * 线程模型：所有 sendRtpFragments 调用只在视频编码线程执行，
+ * 音频通过 ConcurrentLinkedQueue 入队，视频线程在每帧后刷出。
  */
 class RtpSender(private val targetIp: String, private val targetPort: Int) {
 
     private var socket: DatagramSocket? = null
+    private var targetAddr: InetAddress? = null
     private var sequenceNumber: Int = (Math.random() * 0xFFFF).toInt()
     private var ssrc: Int = (Math.random() * 0xFFFFFFFF).toLong().toInt()
     private val payloadType = 96
@@ -25,10 +30,15 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
     private var packetCount = 0L
     private var byteCount = 0L
 
+    // 音频队列：音频编码线程入队，视频线程出队发送（无锁）
+    private val audioQueue = ConcurrentLinkedQueue<Pair<ByteArray, Long>>()
+
     fun start() {
         socket = DatagramSocket()
+        targetAddr = InetAddress.getByName(targetIp)
         packetCount = 0
         byteCount = 0
+        audioQueue.clear()
         Timber.i("RtpSender: started target=$targetIp:$targetPort ssrc=$ssrc localPort=${socket?.localPort}")
     }
 
@@ -55,6 +65,33 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
         }
     }
 
+    /**
+     * 音频编码线程调用：将 AAC 帧入队（非阻塞）
+     */
+    fun queueAudioFrame(aacData: ByteArray, timestampMs: Long) {
+        audioQueue.offer(Pair(aacData, timestampMs))
+    }
+
+    /**
+     * 视频编码线程调用：在每个视频帧发送后，刷出所有排队的音频帧。
+     * 保证 RTP 包不会交叉，消除锁竞争。
+     */
+    fun flushAudioQueue() {
+        val sock = socket ?: return
+        try {
+            while (true) {
+                val pair = audioQueue.poll() ?: break
+                val (aacData, timestampMs) = pair
+                val timestamp = ((timestampMs % 0xFFFFFFFFL) * 90).toInt()
+                val adtsData = addAdtsHeader(aacData)
+                val psData = packAudioPs(adtsData, timestampMs)
+                sendRtpFragments(sock, psData, timestamp)
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "RtpSender: audio flush error")
+        }
+    }
+
     companion object {
         // 切换 PS 封装开关，调试时可设为 false 直接发裸 H264
         var USE_PS_ENCAPSULATION = true
@@ -63,7 +100,7 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
     private fun sendRtpFragments(sock: DatagramSocket, data: ByteArray, timestamp: Int) {
         val mtu = 1400
         var offset = 0
-        val addr = InetAddress.getByName(targetIp)
+        val addr = targetAddr ?: return
 
         while (offset < data.size) {
             val chunkSize = minOf(mtu, data.size - offset)
@@ -109,8 +146,6 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
         writePsPackHeader(out, scr)
 
         // 2. System Header + PSM (仅关键帧)
-        // 注意：某些 ZLM 版本的 libmpeg 对 System Header/PSM 格式校验严格
-        // 如果视频无法播放，可以尝试注释掉 System Header 和 PSM
         if (isKeyFrame) {
             writePsSystemHeader(out)
             writePsm(out)
@@ -125,39 +160,30 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
     /**
      * PS Pack Header - 14 bytes
      * ISO 13818-1 Section 2.5.3.3
-     * 参考 ireader/media-server mpeg-ps-enc.c 的实现
      */
     private fun writePsPackHeader(out: ByteArrayOutputStream, scr90k: Long) {
         // Start code: 00 00 01 BA
         out.write(0x00); out.write(0x00); out.write(0x01); out.write(0xBA)
 
-        // SCR = scr_base * 300 + scr_ext
-        // 我们直接传入 90kHz 的值，scr_base = scr90k / 300, scr_ext = scr90k % 300
         val scrBase = (scr90k / 300) and 0x1FFFFFFFFL
         val scrExt = (scr90k % 300).toInt() and 0x1FF
-
-        // MPEG-2 SCR 编码（6 bytes, 48 bits）:
-        // '01' SCR_base[32..30] '1' SCR_base[29..15] '1' SCR_base[14..0] '1' SCR_ext[8..0] '1'
-        //  2    3                1   15                1   15              1   9              1  = 48 bits = 6 bytes
 
         val s32_30 = ((scrBase shr 30) and 0x07).toInt()
         val s29_15 = ((scrBase shr 15) and 0x7FFF).toInt()
         val s14_0  = (scrBase and 0x7FFF).toInt()
 
-        out.write(0x44 or (s32_30 shl 3) or ((s29_15 shr 13) and 0x03))            // '01' + SCR[32..30] + '1' + SCR[29..28]
-        out.write((s29_15 shr 5) and 0xFF)                                           // SCR[27..20]
-        out.write(((s29_15 and 0x1F) shl 3) or 0x04 or ((s14_0 shr 13) and 0x03))  // SCR[19..15] + '1' + SCR[14..13]
-        out.write((s14_0 shr 5) and 0xFF)                                            // SCR[12..5]
-        out.write(((s14_0 and 0x1F) shl 3) or 0x04 or ((scrExt shr 7) and 0x03))   // SCR[4..0] + '1' + ext[8..7]
-        out.write(((scrExt and 0x7F) shl 1) or 0x01)                                // ext[6..0] + '1'
+        out.write(0x44 or (s32_30 shl 3) or ((s29_15 shr 13) and 0x03))
+        out.write((s29_15 shr 5) and 0xFF)
+        out.write(((s29_15 and 0x1F) shl 3) or 0x04 or ((s14_0 shr 13) and 0x03))
+        out.write((s14_0 shr 5) and 0xFF)
+        out.write(((s14_0 and 0x1F) shl 3) or 0x04 or ((scrExt shr 7) and 0x03))
+        out.write(((scrExt and 0x7F) shl 1) or 0x01)
 
-        // program_mux_rate (22 bits) + marker(1) + marker(1): 3 bytes
-        val muxRate = 6106  // ~= 300KB/s, 常用值
+        val muxRate = 6106
         out.write((0x80 or ((muxRate shr 14) and 0x7F)))
         out.write((muxRate shr 6) and 0xFF)
         out.write(((muxRate and 0x3F) shl 2) or 0x03)
 
-        // reserved(5, 全1) + pack_stuffing_length(3, =0)
         out.write(0xF8)
     }
 
@@ -166,30 +192,25 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
      * ISO 13818-1 Section 2.5.3.5
      */
     private fun writePsSystemHeader(out: ByteArrayOutputStream) {
-        // Start code: 00 00 01 BB
         out.write(0x00); out.write(0x00); out.write(0x01); out.write(0xBB)
 
-        // header_length = 6 + 3(仅视频) = 9
-        out.write(0x00); out.write(0x09)
+        // header_length = 6 + 3(视频) + 3(音频) = 12
+        out.write(0x00); out.write(0x0C)
 
-        // rate_bound: marker(1) + rate_bound(22) + marker(1) = 3 bytes
         val rateBound = 50400
         out.write(0x80 or ((rateBound shr 15) and 0x7F))
         out.write((rateBound shr 7) and 0xFF)
         out.write(((rateBound shl 1) and 0xFE) or 0x01)
 
-        // audio_bound(6)=0 + fixed_flag(1)=0 + CSPS_flag(1)=0
-        out.write(0x00)
-        // system_audio_lock_flag(1)=0 + system_video_lock_flag(1)=1 + marker(1)=1 + video_bound(5)=1
+        // audio_bound(6)=1 + fixed_flag(1)=0 + CSPS_flag(1)=0
+        out.write(0x04)
         out.write(0x61)
-        // packet_rate_restriction_flag(1)=0 + reserved(7)=1111111
         out.write(0x7F)
 
-        // 仅声明 Video stream (E0)，不声明 Audio
-        out.write(0xE0)
-        // '11' + P-STD_buffer_bound_scale(1)=1 + P-STD_buffer_size_bound(13)=512
-        out.write(0xE0)
-        out.write(0x20)
+        // Video stream (E0)
+        out.write(0xE0); out.write(0xE0); out.write(0x20)
+        // Audio stream (C0)
+        out.write(0xC0); out.write(0xC0); out.write(0x20)
     }
 
     /**
@@ -197,37 +218,29 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
      * ISO 13818-1 Section 2.5.4
      */
     private fun writePsm(out: ByteArrayOutputStream) {
-        // Start code: 00 00 01 BC
         out.write(0x00); out.write(0x00); out.write(0x01); out.write(0xBC)
 
-        // program_stream_map_length = 14 (2+2+2+4+4 = current_next+reserved + ps_info_len + es_map_len + 1 video stream + CRC32)
-        out.write(0x00); out.write(0x0E)
-
-        // current_next_indicator(1)=1 + reserved(2)=11 + program_stream_map_version(5)=0
+        // length = 2+2+2+8+4 = 18
+        out.write(0x00); out.write(0x12)
         out.write(0xE0)
-
-        // reserved(7)=1111111 + marker(1)=1
         out.write(0xFF)
-
-        // program_stream_info_length = 0
         out.write(0x00); out.write(0x00)
 
-        // elementary_stream_map_length = 4 (仅 1 个视频流 * 4 bytes)
-        out.write(0x00); out.write(0x04)
-
-        // Video: stream_type=0x1B(H.264) + elementary_stream_id=0xE0 + ES_info_length=0
+        // es_map_length = 8 (视频 + 音频)
+        out.write(0x00); out.write(0x08)
+        // Video: H.264
         out.write(0x1B); out.write(0xE0); out.write(0x00); out.write(0x00)
+        // Audio: AAC (MPEG-4 AAC/ADTS, stream_type=0x0F)
+        out.write(0x0F); out.write(0xC0); out.write(0x00); out.write(0x00)
 
-        // CRC_32 (4 bytes) - 设为 0（ZLM 不校验 CRC）
+        // CRC_32
         out.write(0x00); out.write(0x00); out.write(0x00); out.write(0x00)
     }
 
     /**
      * PES Packet
-     * ISO 13818-1 Section 2.4.3.7
      */
     private fun writePes(out: ByteArrayOutputStream, streamId: Int, payload: ByteArray, pts: Long) {
-        // 如果 payload 太大，分割为多个 PES 包（每个最大 65500 字节）
         val maxPesPayload = 65500
         var offset = 0
 
@@ -235,14 +248,12 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
             val chunkSize = minOf(maxPesPayload, payload.size - offset)
             val isFirst = (offset == 0)
 
-            // Start code: 00 00 01 + stream_id
             out.write(0x00); out.write(0x00); out.write(0x01); out.write(streamId)
 
             val ptsHeaderLen = if (isFirst) 5 else 0
             val pesOptHeaderLen = 3 + ptsHeaderLen
             val pesDataLen = pesOptHeaderLen + chunkSize
 
-            // PES_packet_length (0 for unbounded video, otherwise actual length)
             if (pesDataLen <= 65535) {
                 out.write((pesDataLen shr 8) and 0xFF)
                 out.write(pesDataLen and 0xFF)
@@ -250,29 +261,22 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
                 out.write(0x00); out.write(0x00)
             }
 
-            // '10' + PES_scrambling_control(2)=00 + PES_priority=0 + data_alignment=0 + copyright=0 + original_or_copy=0
             out.write(0x80)
 
-            // PTS_DTS_flags + other flags
             if (isFirst) {
-                out.write(0x80) // PTS only
-                out.write(ptsHeaderLen) // PES_header_data_length = 5
+                out.write(0x80)
+                out.write(ptsHeaderLen)
                 writePts(out, pts)
             } else {
-                out.write(0x00) // No PTS
-                out.write(0x00) // PES_header_data_length = 0
+                out.write(0x00)
+                out.write(0x00)
             }
 
-            // Payload
             out.write(payload, offset, chunkSize)
             offset += chunkSize
         }
     }
 
-    /**
-     * Write PTS (5 bytes)
-     * '0010' + PTS[32..30] + '1' + PTS[29..15] + '1' + PTS[14..0] + '1'
-     */
     private fun writePts(out: ByteArrayOutputStream, pts: Long) {
         val v = pts and 0x1FFFFFFFFL
         out.write((0x21 or ((v shr 29) and 0x0E).toInt()))
@@ -282,11 +286,46 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
         out.write((0x01 or ((v shl 1) and 0xFE).toInt()))
     }
 
+    /**
+     * 将 AAC ADTS 音频封装为 PS 包
+     */
+    private fun packAudioPs(adtsData: ByteArray, timestampMs: Long): ByteArray {
+        val out = ByteArrayOutputStream(adtsData.size + 50)
+        val pts = timestampMs * 90
+        writePsPackHeader(out, pts)
+        writePes(out, 0xC0, adtsData, pts)
+        return out.toByteArray()
+    }
+
+    /**
+     * 为 AAC 帧添加 ADTS 头（7 bytes, 无 CRC）
+     * 参数: 16kHz, Mono, AAC-LC
+     */
+    private fun addAdtsHeader(aacData: ByteArray): ByteArray {
+        val frameLength = 7 + aacData.size
+        val profile = 1   // AAC-LC
+        val freqIdx = 8   // 16kHz
+        val chanCfg = 1   // Mono
+
+        val header = ByteArray(7)
+        header[0] = 0xFF.toByte()
+        header[1] = 0xF1.toByte()
+        header[2] = ((profile shl 6) or (freqIdx shl 2) or (chanCfg shr 2)).toByte()
+        header[3] = (((chanCfg and 3) shl 6) or (frameLength shr 11)).toByte()
+        header[4] = ((frameLength shr 3) and 0xFF).toByte()
+        header[5] = (((frameLength and 7) shl 5) or 0x1F).toByte()
+        header[6] = 0xFC.toByte()
+
+        return header + aacData
+    }
+
     fun getSsrc(): String = String.format("%010d", ssrc.toLong() and 0xFFFFFFFFL)
 
     fun stop() {
+        audioQueue.clear()
         socket?.close()
         socket = null
+        targetAddr = null
         Timber.i("RtpSender: stopped")
     }
 }

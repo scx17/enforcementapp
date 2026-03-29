@@ -7,6 +7,8 @@ import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
+import android.media.AudioFormat
+import android.media.AudioRecord
 import android.media.Image
 import android.media.ImageReader
 import android.media.MediaCodec
@@ -40,6 +42,11 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
     private var isRecording = false
     private var currentRecordingFile: File? = null
     private var useFrontCamera = false
+
+    private var audioMediaCodec: MediaCodec? = null
+    private var audioRecord: AudioRecord? = null
+    private var audioInputThread: Thread? = null
+    private var audioEncoderThread: Thread? = null
 
     private var imageReader: ImageReader? = null
     private var photoCallback: ((File) -> Unit)? = null
@@ -99,6 +106,7 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
     private fun startPreviewSession() {
         val camera = cameraDevice ?: return
         val surfaces = mutableListOf(previewSurface)
+        Timber.i("ImageReader 初始化: 1920x1080, JPEG, maxImages=2")
         imageReader = ImageReader.newInstance(1920, 1080, ImageFormat.JPEG, 2).also {
             it.setOnImageAvailableListener({ reader ->
                 val image: Image? = reader.acquireLatestImage()
@@ -162,6 +170,7 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
                 setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
                 setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel31)
             }
+            Timber.i("编码参数: 分辨率=1920x1080, 码率=2000kbps, 帧率=25fps, Profile=Baseline, CBR模式")
             val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             val encoderSurface = codec.createInputSurface()
@@ -188,7 +197,8 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
                     session.setRepeatingRequest(request.build(), null, bgHandler)
                     isEncoding = true
                     startEncoderOutputLoop()
-                    Timber.i("Camera encoding started -> $rtpIp:$rtpPort")
+                    startAudioEncoding()
+                    Timber.i("Camera encoding started (video+audio) -> $rtpIp:$rtpPort")
                 }
                 override fun onConfigureFailed(session: CameraCaptureSession) {
                     Timber.e("Encoding session configure failed")
@@ -202,6 +212,7 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
     private fun startEncoderOutputLoop() {
         var spsPps: ByteArray? = null  // 缓存 SPS/PPS，拼接到每个 IDR 帧前
 
+        Timber.i("编码输出线程启动")
         encoderThread = Thread {
             val bufferInfo = MediaCodec.BufferInfo()
             while (isEncoding) {
@@ -232,6 +243,7 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
                         }
 
                         rtpSender?.sendVideoFrame(frameData, bufferInfo.presentationTimeUs / 1000, isKeyFrame)
+                        rtpSender?.flushAudioQueue()  // 视频帧后刷出音频，避免锁竞争
                         Timber.v("RTP frame sent: ${frameData.size} bytes, keyframe=$isKeyFrame")
                     }
                 } catch (e: Exception) {
@@ -241,11 +253,111 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
         }.also { it.start() }
     }
 
+    @SuppressLint("MissingPermission")
+    private fun startAudioEncoding() {
+        try {
+            val sampleRate = 16000
+            val channelConfig = AudioFormat.CHANNEL_IN_MONO
+            val pcmFormat = AudioFormat.ENCODING_PCM_16BIT
+            val minBufSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, pcmFormat)
+
+            val recorder = AudioRecord(
+                MediaRecorder.AudioSource.CAMCORDER,
+                sampleRate, channelConfig, pcmFormat,
+                minBufSize * 2
+            )
+            audioRecord = recorder
+
+            val audioFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, 1).apply {
+                setInteger(MediaFormat.KEY_BIT_RATE, 64_000)
+                setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+                setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, minBufSize * 2)
+            }
+            val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+            codec.configure(audioFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            codec.start()
+            audioMediaCodec = codec
+            recorder.startRecording()
+
+            Timber.i("音频编码启动: AAC-LC, ${sampleRate}Hz, Mono, 64kbps (队列模式)")
+
+            // 输入线程: 从麦克风读取 PCM 送入编码器（低优先级）
+            audioInputThread = Thread {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+                val buffer = ByteArray(minBufSize)
+                while (isEncoding) {
+                    try {
+                        val read = recorder.read(buffer, 0, buffer.size)
+                        if (read > 0) {
+                            val inputIndex = codec.dequeueInputBuffer(5_000)
+                            if (inputIndex >= 0) {
+                                val inputBuffer = codec.getInputBuffer(inputIndex)!!
+                                inputBuffer.clear()
+                                inputBuffer.put(buffer, 0, read)
+                                codec.queueInputBuffer(inputIndex, 0, read, System.nanoTime() / 1000, 0)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        if (isEncoding) Timber.e(e, "音频输入错误")
+                    }
+                }
+            }.also { it.start() }
+
+            // 输出线程: 读取编码后的 AAC 帧入队到 RtpSender（不直接发送，由视频线程统一刷出）
+            audioEncoderThread = Thread {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+                val bufferInfo = MediaCodec.BufferInfo()
+                while (isEncoding) {
+                    try {
+                        val index = codec.dequeueOutputBuffer(bufferInfo, 10_000)
+                        if (index >= 0) {
+                            val outBuffer = codec.getOutputBuffer(index)!!
+                            val data = ByteArray(bufferInfo.size)
+                            outBuffer.get(data)
+                            codec.releaseOutputBuffer(index, false)
+
+                            if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                                Timber.i("AudioEncoder: config ${data.size} bytes (skipped)")
+                                continue
+                            }
+
+                            // 入队而非直接发送，由视频线程 flushAudioQueue() 统一发送
+                            rtpSender?.queueAudioFrame(data, bufferInfo.presentationTimeUs / 1000)
+                        }
+                    } catch (e: Exception) {
+                        if (isEncoding) Timber.e(e, "音频编码输出错误")
+                    }
+                }
+            }.also { it.start() }
+        } catch (e: Exception) {
+            Timber.e(e, "音频编码启动失败")
+        }
+    }
+
+    private fun stopAudioEncoding() {
+        audioInputThread?.join(2000)
+        audioInputThread = null
+        audioEncoderThread?.join(2000)
+        audioEncoderThread = null
+
+        try { audioRecord?.stop() } catch (_: Exception) {}
+        audioRecord?.release()
+        audioRecord = null
+
+        try { audioMediaCodec?.apply { stop(); release() } } catch (_: Exception) {}
+        audioMediaCodec = null
+        Timber.i("音频编码已停止")
+    }
+
     fun stopEncoding() {
         if (!isEncoding) return
         isEncoding = false
+        Timber.i("编码输出线程停止中...")
         encoderThread?.join(2000)
         encoderThread = null
+        Timber.i("视频编码输出线程已停止")
+
+        stopAudioEncoding()
 
         mediaCodec?.apply { stop(); release() }
         mediaCodec = null
@@ -254,7 +366,7 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
 
         // 恢复预览 session（不含编码器 Surface）
         startPreviewSession()
-        Timber.i("Camera encoding stopped")
+        Timber.i("Camera encoding stopped (video+audio)")
     }
 
     fun capturePhoto(outputFile: File, callback: (File) -> Unit) {
@@ -347,15 +459,20 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
     fun isFrontCamera() = useFrontCamera
 
     private fun closeCamera() {
+        Timber.i("摄像头关闭流程开始")
         stopEncoding()
         if (isRecording) stopLocalRecording()
         captureSession?.close()
         captureSession = null
+        Timber.d("CaptureSession 已关闭")
         cameraDevice?.close()
         cameraDevice = null
+        Timber.d("CameraDevice 已关闭")
         imageReader?.close()
         imageReader = null
+        Timber.d("ImageReader 已关闭")
         stopBackgroundThread()
+        Timber.i("摄像头关闭流程完成")
     }
 
     private fun startBackgroundThread() {
