@@ -34,6 +34,8 @@ import com.hdcollection.enforcement.hardware.LightState
 import com.hdcollection.enforcement.ui.LightPanelFragment
 import com.hdcollection.enforcement.ui.function.FunctionActivity
 import com.hdcollection.enforcement.ui.playback.PlaybackActivity
+import com.hdcollection.enforcement.service.AlarmReporter
+import com.hdcollection.enforcement.receiver.UsbStateReceiver
 import com.hdcollection.enforcement.ui.settings.SettingsActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -49,12 +51,15 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     private lateinit var settings: AppSettings
     private lateinit var gb28181Manager: GB28181Manager
     private lateinit var camera: Camera2Preview
+    private lateinit var alarmReporter: AlarmReporter
 
+    private var isNavigatingInternally = false
     private var isRecording = false
     private var isFlashOn = false
     private var currentRecordFile: File? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private val hardwareKeyReceiver = HardwareKeyReceiver()
+    private val usbStateReceiver = UsbStateReceiver()
 
     // 语音提示播放器
     private var voicePlayer: MediaPlayer? = null
@@ -97,15 +102,39 @@ class MainActivity : AppCompatActivity(), StreamCallback {
 
         // 保持屏幕常亮 + WakeLock 防止 CPU 休眠
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        // 全屏沉浸模式：隐藏导航栏和状态栏
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            or View.SYSTEM_UI_FLAG_FULLSCREEN
+            or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        )
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "EnforcementApp::MainWakeLock")
         wakeLock?.acquire()
 
         settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
-        gb28181Manager = GB28181Manager(settings, this)
+        alarmReporter = AlarmReporter(settings)
+        try {
+            gb28181Manager = GB28181Manager(settings, this)
+            Timber.i("GB28181Manager 初始化成功")
+        } catch (e: Exception) {
+            Timber.e(e, "GB28181Manager 初始化失败")
+            throw e
+        }
 
         val surfaceView = findViewById<SurfaceView>(R.id.surfacePreview)
-        camera = Camera2Preview(this, surfaceView)
+        try {
+            camera = Camera2Preview(this, surfaceView)
+            Timber.i("Camera2Preview 初始化成功")
+        } catch (e: Exception) {
+            Timber.e(e, "Camera2Preview 初始化失败")
+            throw e
+        }
 
         // 预加载快门音
         shutterSound.load(MediaActionSound.SHUTTER_CLICK)
@@ -130,22 +159,59 @@ class MainActivity : AppCompatActivity(), StreamCallback {
 
         // 注册硬件按键广播接收器
         registerHardwareKeyReceiver()
-    }
 
-    override fun onResume() {
-        super.onResume()
-        clockHandler.post(clockRunnable)
-        updateDeviceInfo()
+        // 注册 USB 插拔广播接收器
+        registerReceiver(usbStateReceiver, UsbStateReceiver.createIntentFilter())
+        Timber.i("USB state receiver registered")
     }
 
     override fun onPause() {
         super.onPause()
         clockHandler.removeCallbacks(clockRunnable)
+        // 仅在被系统切走时拉回前台（内部导航不拦截）
+        if (!isNavigatingInternally) {
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (!isFinishing && !isNavigatingInternally) {
+                    val intent = Intent(this, MainActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    }
+                    startActivity(intent)
+                }
+            }, 300)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        isNavigatingInternally = false
+        clockHandler.post(clockRunnable)
+        updateDeviceInfo()
+    }
+
+    private fun startInternalActivity(intent: Intent) {
+        isNavigatingInternally = true
+        startActivity(intent)
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                or View.SYSTEM_UI_FLAG_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            )
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         try { unregisterReceiver(hardwareKeyReceiver) } catch (_: Exception) {}
+        try { unregisterReceiver(usbStateReceiver) } catch (_: Exception) {}
         recordingTimerHandler.removeCallbacks(recordingTimerRunnable)
         voicePlayer?.release()
         shutterSound.release()
@@ -155,16 +221,16 @@ class MainActivity : AppCompatActivity(), StreamCallback {
 
     private fun setupBottomButtons() {
         findViewById<ImageButton>(R.id.btnSettings).setOnClickListener {
-            startActivity(Intent(this, SettingsActivity::class.java))
+            startInternalActivity(Intent(this, SettingsActivity::class.java))
         }
         findViewById<ImageButton>(R.id.btnLight).setOnClickListener {
             showLightPanel()
         }
         findViewById<ImageButton>(R.id.btnPlayback).setOnClickListener {
-            startActivity(Intent(this, PlaybackActivity::class.java))
+            startInternalActivity(Intent(this, PlaybackActivity::class.java))
         }
         findViewById<ImageButton>(R.id.btnFunction).setOnClickListener {
-            startActivity(Intent(this, FunctionActivity::class.java))
+            startInternalActivity(Intent(this, FunctionActivity::class.java))
         }
         // 切换前后摄像头
         findViewById<ImageButton>(R.id.btnSwitchCamera).setOnClickListener {
@@ -232,6 +298,8 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         val bitrate = settings.videoBitrate
         findViewById<TextView>(R.id.tvEncoding).text = "H264 $resolution ${bitrate}k"
 
+        Timber.i("设备信息加载: deviceId=$deviceId, sipServer=${settings.sipServer}:${settings.sipPort}, resolution=$resolution, bitrate=${bitrate}k")
+
         updateStorageInfo()
     }
 
@@ -263,11 +331,15 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_PERMISSIONS) {
-            if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+            val denied = permissions.zip(grantResults.toList())
+                .filter { it.second != PackageManager.PERMISSION_GRANTED }
+                .map { it.first }
+            if (denied.isEmpty()) {
+                Timber.i("所有权限已授予: ${permissions.joinToString()}")
                 startGB28181()
             } else {
+                Timber.w("权限被拒绝: ${denied.joinToString()}")
                 updateStreamStatus("权限不足", "#F44336")
-                Timber.w("Required permissions denied")
             }
         }
     }
@@ -299,9 +371,16 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         Timber.i("Intercom received from: $callerInfo")
     }
 
+    // 禁止返回键退出（执法仪主应用不允许被退出）
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        Timber.d("返回键被拦截，执法仪主应用禁止退出")
+    }
+
     // 物理按键绑定（DSJ-Z6 执法仪）
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         return when (keyCode) {
+            KeyEvent.KEYCODE_BACK -> true
             KeyEvent.KEYCODE_CAMERA, 293 -> {
                 toggleLocalRecording()
                 true
@@ -329,11 +408,33 @@ class MainActivity : AppCompatActivity(), StreamCallback {
             HardwareKeyReceiver.KeyAction.PHOTO_PRESS -> capturePhoto()
             HardwareKeyReceiver.KeyAction.PHOTO_LONG_PRESS -> capturePhoto()
             HardwareKeyReceiver.KeyAction.PHOTO_LONG_PRESS_CANCELED -> {}
-            HardwareKeyReceiver.KeyAction.SOS_PRESS -> toggleFlashLight()
+            HardwareKeyReceiver.KeyAction.SOS_PRESS -> {
+                toggleFlashLight()
+                // 上报 SOS 告警
+                val app = application as EnforcementApp
+                CoroutineScope(Dispatchers.IO).launch {
+                    alarmReporter.report(
+                        "sos", 3, "紧急按钮报警",
+                        "${settings.deviceId} 触发紧急按钮",
+                        app.locationService.getLatitude().takeIf { it != 0.0 },
+                        app.locationService.getLongitude().takeIf { it != 0.0 }
+                    )
+                }
+            }
             HardwareKeyReceiver.KeyAction.SOS_LONG_PRESS -> {
                 LightState.strobeRedBlueOn = true
                 DeviceHardwareManager.setStrobeRedBlueBlink()
                 Timber.i("SOS: strobe red-blue blink activated")
+                // 上报 SOS 长按告警
+                val app = application as EnforcementApp
+                CoroutineScope(Dispatchers.IO).launch {
+                    alarmReporter.report(
+                        "sos", 3, "紧急按钮报警(长按)",
+                        "${settings.deviceId} 长按触发紧急按钮",
+                        app.locationService.getLatitude().takeIf { it != 0.0 },
+                        app.locationService.getLongitude().takeIf { it != 0.0 }
+                    )
+                }
             }
             HardwareKeyReceiver.KeyAction.PTT_DOWN -> {
                 val sipManager = (application as EnforcementApp).sipManager
@@ -356,8 +457,8 @@ class MainActivity : AppCompatActivity(), StreamCallback {
             HardwareKeyReceiver.KeyAction.MARK_LONG_PRESS -> showLightPanel()
             HardwareKeyReceiver.KeyAction.RECORD_PRESS -> Timber.i("Record key pressed")
             HardwareKeyReceiver.KeyAction.RECORD_LONG_PRESS -> Timber.i("Record key long pressed")
-            HardwareKeyReceiver.KeyAction.FN_PRESS -> startActivity(Intent(this, FunctionActivity::class.java))
-            HardwareKeyReceiver.KeyAction.FN_LONG_PRESS -> startActivity(Intent(this, SettingsActivity::class.java))
+            HardwareKeyReceiver.KeyAction.FN_PRESS -> startInternalActivity(Intent(this, FunctionActivity::class.java))
+            HardwareKeyReceiver.KeyAction.FN_LONG_PRESS -> startInternalActivity(Intent(this, SettingsActivity::class.java))
         }
     }
 
@@ -413,10 +514,15 @@ class MainActivity : AppCompatActivity(), StreamCallback {
                 val locService = app.locationService
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
+                        val uploadClient = okhttp3.OkHttpClient.Builder()
+                            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                            .writeTimeout(10, java.util.concurrent.TimeUnit.MINUTES)
+                            .readTimeout(5, java.util.concurrent.TimeUnit.MINUTES)
+                            .build()
                         val uploadService = com.hdcollection.enforcement.upload.UploadService(
                             com.hdcollection.enforcement.data.db.AppDatabase.getInstance(applicationContext).uploadQueueDao(),
                             com.hdcollection.enforcement.data.AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE)),
-                            okhttp3.OkHttpClient()
+                            uploadClient
                         )
                         uploadService.enqueue(
                             deviceId = settings.deviceId,
@@ -496,6 +602,7 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     }
 
     private fun showIncomingCallDialog(callerUri: String) {
+        Timber.i("对讲来电: caller=$callerUri")
         val view = layoutInflater.inflate(R.layout.dialog_incoming_call, null)
         view.findViewById<TextView>(R.id.tvCaller).text = callerUri
 
@@ -505,10 +612,12 @@ class MainActivity : AppCompatActivity(), StreamCallback {
             .create()
 
         view.findViewById<Button>(R.id.btnAccept).setOnClickListener {
+            Timber.i("对讲来电已接听: caller=$callerUri")
             (application as EnforcementApp).sipManager.acceptCall()
             dialog.dismiss()
         }
         view.findViewById<Button>(R.id.btnDecline).setOnClickListener {
+            Timber.i("对讲来电已拒绝: caller=$callerUri")
             (application as EnforcementApp).sipManager.declineCall()
             dialog.dismiss()
         }

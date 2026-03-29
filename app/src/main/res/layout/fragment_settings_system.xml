@@ -19,5 +19,44 @@
 
         <Button android:id="@+id/btnSaveSystem" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:text="保存" android:backgroundTint="#1A237E" android:textColor="#FFFFFF" />
+
+        <View android:layout_width="match_parent" android:layout_height="1dp"
+            android:background="#333355" android:layout_marginTop="24dp" android:layout_marginBottom="16dp" />
+
+        <TextView android:text="系统设置" android:textColor="#FFFFFF" android:textSize="16sp"
+            android:textStyle="bold" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp" />
+
+        <Button android:id="@+id/btnWifi" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="Wi-Fi 设置" android:backgroundTint="#2A2A3E" android:textColor="#FFFFFF"
+            android:layout_marginBottom="8dp" />
+
+        <Button android:id="@+id/btnBluetooth" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="蓝牙设置" android:backgroundTint="#2A2A3E" android:textColor="#FFFFFF"
+            android:layout_marginBottom="8dp" />
+
+        <Button android:id="@+id/btnDisplay" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="显示 / 亮度" android:backgroundTint="#2A2A3E" android:textColor="#FFFFFF"
+            android:layout_marginBottom="8dp" />
+
+        <Button android:id="@+id/btnSound" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="声音 / 音量" android:backgroundTint="#2A2A3E" android:textColor="#FFFFFF"
+            android:layout_marginBottom="8dp" />
+
+        <Button android:id="@+id/btnDateTime" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="日期和时间" android:backgroundTint="#2A2A3E" android:textColor="#FFFFFF"
+            android:layout_marginBottom="8dp" />
+
+        <Button android:id="@+id/btnLocation" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="位置服务" android:backgroundTint="#2A2A3E" android:textColor="#FFFFFF"
+            android:layout_marginBottom="8dp" />
+
+        <Button android:id="@+id/btnAbout" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="关于设备" android:backgroundTint="#2A2A3E" android:textColor="#FFFFFF"
+            android:layout_marginBottom="8dp" />
+
+        <Button android:id="@+id/btnAllSettings" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="全部系统设置" android:backgroundTint="#1A237E" android:textColor="#FFFFFF"
+            android:layout_marginBottom="8dp" />
     </LinearLayout>
 </ScrollView>

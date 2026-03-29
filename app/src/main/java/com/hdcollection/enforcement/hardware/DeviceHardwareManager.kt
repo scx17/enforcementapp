@@ -94,6 +94,15 @@ object DeviceHardwareManager {
 
     fun setIndicatorOff() = setIndicatorFlash(0xFF000000.toInt(), 0, 1)
 
+    // ---- USB 磁盘模式 ----
+    fun setUsbDisk(on: Boolean): Boolean {
+        return invokeWithReturn("setUsbDisk", arrayOf(Boolean::class.javaPrimitiveType!!), arrayOf(on)) as? Boolean ?: false
+    }
+
+    fun isUsbDiskOpen(): Boolean {
+        return invokeReturn("isUsbDiskOpen", Boolean::class.javaPrimitiveType!!) as? Boolean ?: false
+    }
+
     // ---- 设备信息 ----
     fun getSn(): String {
         return invokeReturn("getSn", String::class.java) as? String ?: ""
@@ -123,6 +132,17 @@ object DeviceHardwareManager {
         return try {
             val method = dmClass.getMethod(methodName)
             method.invoke(deviceManager)
+        } catch (e: Exception) {
+            Timber.w(e, "DeviceHardwareManager.$methodName failed")
+            null
+        }
+    }
+
+    private fun invokeWithReturn(methodName: String, paramTypes: Array<Class<*>>, args: Array<Any>): Any? {
+        if (!available || dmClass == null || deviceManager == null) return null
+        return try {
+            val method = dmClass.getMethod(methodName, *paramTypes)
+            method.invoke(deviceManager, *args)
         } catch (e: Exception) {
             Timber.w(e, "DeviceHardwareManager.$methodName failed")
             null
