@@ -1,0 +1,42 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Android
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+local.properties
+proguard/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# IDE - Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# IDE - VSCode
+.vscode/
+
+# Kotlin
+.kotlin/
+
+# Generated files
+bin/
+gen/
+out/
+release/
+
+# Logs
+*.log
+hs_err_pid*
+
+# OS
+.DS_Store
+Thumbs.db
