@@ -8,10 +8,6 @@ import android.graphics.Color
 import android.hardware.camera2.CameraManager
 import android.media.MediaActionSound
 import android.media.MediaPlayer
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -23,6 +19,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.ImageButton
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -30,8 +27,6 @@ import androidx.core.content.ContextCompat
 import com.hdcollection.enforcement.EnforcementApp
 import com.hdcollection.enforcement.R
 import com.hdcollection.enforcement.data.AppSettings
-import com.hdcollection.enforcement.gb28181.GB28181Manager
-import com.hdcollection.enforcement.gb28181.StreamCallback
 import com.hdcollection.enforcement.hardware.DeviceHardwareManager
 import com.hdcollection.enforcement.hardware.HardwareKeyReceiver
 import com.hdcollection.enforcement.hardware.LightState
@@ -54,10 +49,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class MainActivity : AppCompatActivity(), StreamCallback {
+class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
 
     private lateinit var settings: AppSettings
-    private lateinit var gb28181Manager: GB28181Manager
     private lateinit var alarmReporter: AlarmReporter
 
     private var isNavigatingInternally = false
@@ -65,13 +59,13 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     private var isFlashOn = false
     private var currentRecordFile: File? = null
     private var wakeLock: PowerManager.WakeLock? = null
-    private var gbNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private var mediaService: MediaCaptureService? = null
     private val mediaServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             val svc = (binder as? MediaCaptureService.LocalBinder)?.getService()
             mediaService = svc
             Timber.i("MediaCaptureService connected")
+            svc?.addListener(this@MainActivity)
             svc?.attachPreview(findViewById(R.id.surfacePreview))
         }
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -145,15 +139,21 @@ class MainActivity : AppCompatActivity(), StreamCallback {
 
         settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
         alarmReporter = AlarmReporter(settings)
-        try {
-            gb28181Manager = GB28181Manager(settings, this)
-            Timber.i("GB28181Manager 初始化成功")
-        } catch (e: Exception) {
-            Timber.e(e, "GB28181Manager 初始化失败")
-            throw e
-        }
+        // GB28181Manager + Camera 已由 MediaCaptureService 持有
 
-        // Camera 已由 MediaCaptureService 持有并 start，preview 在 onServiceConnected 中 attach
+        // 检查自定义设备编号是否已配置
+        if (settings.customCode.isBlank() && settings.deviceId.isNotBlank()) {
+            // 已有 SIP 编号但无自定义编号 → 从平台拉取（迁移回填的默认值）
+            syncCustomCodeFromPlatform()
+        } else if (settings.customCode.isBlank() && settings.deviceId.isBlank()) {
+            // 全新设备未配置 → 跳设置页
+            Timber.w("设备未配置，跳转设置页")
+            Toast.makeText(this, "请先配置平台地址和设备编号", Toast.LENGTH_LONG).show()
+            startActivity(Intent(this, SettingsActivity::class.java))
+        } else {
+            // 已有编号 → 静默同步（处理管理员改名）
+            syncCustomCodeFromPlatform()
+        }
 
         // 预加载快门音
         shutterSound.load(MediaActionSound.SHUTTER_CLICK)
@@ -165,13 +165,9 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         // 录像指示器默认隐藏
         findViewById<TextView>(R.id.tvRecordingIndicator).visibility = View.GONE
 
-        if (hasRequiredPermissions()) {
-            startGB28181()
-        } else {
+        if (!hasRequiredPermissions()) {
             ActivityCompat.requestPermissions(this, requiredPermissions, REQUEST_PERMISSIONS)
         }
-
-        registerGbNetworkCallback()
 
         // 注册 SIP 来电监听
         (application as EnforcementApp).sipManager.onIncomingCall = { call ->
@@ -238,11 +234,10 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         super.onDestroy()
         try { unregisterReceiver(hardwareKeyReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(usbStateReceiver) } catch (_: Exception) {}
-        unregisterGbNetworkCallback()
         recordingTimerHandler.removeCallbacks(recordingTimerRunnable)
         voicePlayer?.release()
         shutterSound.release()
-        gb28181Manager.unregister()
+        mediaService?.removeListener(this)
         mediaService?.detachPreview()
         try { unbindService(mediaServiceConnection) } catch (_: Exception) {}
         wakeLock?.let { if (it.isHeld) it.release() }
@@ -265,62 +260,6 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         findViewById<ImageButton>(R.id.btnSwitchCamera).setOnClickListener {
             mediaService?.switchCamera()
             Timber.i("摄像头切换: front=${mediaService?.isFrontCamera()}")
-        }
-    }
-
-    private fun startGB28181() {
-        updateStreamStatus("注册中", "#FF9800")
-        gb28181Manager.register()
-    }
-
-    /**
-     * 注册系统网络状态回调，WiFi 恢复时立即触发 GB28181 重新注册。
-     * 解决断网后重连不会自动重注册的问题（原来要等 keepAlive 心跳累计 3 次失败约 3 分钟才感知）。
-     */
-    private fun registerGbNetworkCallback() {
-        if (gbNetworkCallback != null) return
-        try {
-            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            val req = NetworkRequest.Builder()
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .build()
-            val cb = object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) {
-                    Timber.i("GB28181 NetworkCallback: onAvailable network=$network")
-                    gb28181Manager.triggerReconnect("network onAvailable")
-                }
-
-                override fun onLost(network: Network) {
-                    Timber.i("GB28181 NetworkCallback: onLost network=$network")
-                    gb28181Manager.notifyNetworkLost("network onLost")
-                }
-
-                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                    if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
-                        Timber.d("GB28181 NetworkCallback: capabilities validated, network=$network")
-                        gb28181Manager.triggerReconnect("network validated")
-                    }
-                }
-            }
-            cm.registerNetworkCallback(req, cb)
-            gbNetworkCallback = cb
-            Timber.i("GB28181: 网络状态回调已注册")
-        } catch (e: Exception) {
-            Timber.w(e, "GB28181: 注册网络回调失败")
-        }
-    }
-
-    private fun unregisterGbNetworkCallback() {
-        val cb = gbNetworkCallback ?: return
-        try {
-            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            cm.unregisterNetworkCallback(cb)
-            Timber.i("GB28181: 网络状态回调已反注册")
-        } catch (e: Exception) {
-            Timber.w(e, "GB28181: 反注册网络回调失败")
-        } finally {
-            gbNetworkCallback = null
         }
     }
 
@@ -402,14 +341,14 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     }
 
     private fun updateDeviceInfo() {
-        val deviceId = settings.deviceId.ifEmpty { "未配置" }
-        findViewById<TextView>(R.id.tvDeviceId).text = deviceId
+        val displayCode = settings.customCode.ifEmpty { settings.deviceId.ifEmpty { "未配置" } }
+        findViewById<TextView>(R.id.tvDeviceId).text = displayCode
 
         val resolution = settings.videoResolution
         val bitrate = settings.videoBitrate
         findViewById<TextView>(R.id.tvEncoding).text = "H264 $resolution ${bitrate}k"
 
-        Timber.i("设备信息加载: deviceId=$deviceId, sipServer=${settings.sipServer}:${settings.sipPort}, resolution=$resolution, bitrate=${bitrate}k")
+        Timber.i("设备信息加载: customCode=$displayCode, sipDeviceId=${settings.deviceId}, sipServer=${settings.sipServer}:${settings.sipPort}, resolution=$resolution, bitrate=${bitrate}k")
 
         updateStorageInfo()
     }
@@ -447,7 +386,6 @@ class MainActivity : AppCompatActivity(), StreamCallback {
                 .map { it.first }
             if (denied.isEmpty()) {
                 Timber.i("所有权限已授予: ${permissions.joinToString()}")
-                startGB28181()
             } else {
                 Timber.w("权限被拒绝: ${denied.joinToString()}")
                 updateStreamStatus("权限不足", "#F44336")
@@ -455,35 +393,24 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         }
     }
 
-    // StreamCallback 实现
+    // MediaCaptureService.Listener 回调 — Service 处理 StreamCallback，Activity 只更新 UI
     override fun onRegistered(deviceId: String) {
-        Timber.i("GB28181 registered: $deviceId")
         runOnUiThread {
             updateStreamStatus("注册在线", "#4CAF50")
-            // 上线后检查未处理工单
             checkPendingWorkTasks()
         }
     }
 
     override fun onRegistrationFailed(reason: String) {
-        Timber.w("GB28181 registration failed: $reason")
         runOnUiThread { updateStreamStatus("断网", "#F44336") }
     }
 
-    override fun onStreamStartRequested(channelId: String, rtpIp: String, rtpPort: Int, ssrc: Int) {
-        Timber.i("Stream start requested: $channelId -> $rtpIp:$rtpPort ssrc=$ssrc")
+    override fun onStreamStarted(channelId: String) {
         runOnUiThread { updateStreamStatus("推流中", "#2196F3") }
-        mediaService?.startEncoding(rtpIp, rtpPort, ssrc)
     }
 
-    override fun onStreamStopRequested(channelId: String) {
-        Timber.i("Stream stop requested: $channelId")
-        mediaService?.stopEncoding()
+    override fun onStreamStopped(channelId: String) {
         runOnUiThread { updateStreamStatus("注册在线", "#4CAF50") }
-    }
-
-    override fun onIntercomReceived(callerInfo: String) {
-        Timber.i("Intercom received from: $callerInfo")
     }
 
     // 禁止返回键退出（执法仪主应用不允许被退出）
@@ -796,6 +723,46 @@ class MainActivity : AppCompatActivity(), StreamCallback {
             dialog.dismiss()
         }
         dialog.show()
+    }
+
+    /** 启动时从平台拉取最新 customCode（处理管理员改名/首次迁移回填） */
+    private fun syncCustomCodeFromPlatform() {
+        val apiUrl = settings.platformApiUrl.trimEnd('/')
+        if (apiUrl.isEmpty()) return
+        Thread {
+            try {
+                val imei = try {
+                    val dm = android.app.devicemanager.DeviceManager.getInstance()
+                    dm.imei?.takeIf { it.isNotBlank() } ?: ""
+                } catch (_: Exception) { "" }
+                if (imei.isBlank()) return@Thread
+
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+                val request = okhttp3.Request.Builder()
+                    .url("$apiUrl/api/device/me?imei=$imei")
+                    .get()
+                    .build()
+                val response = client.newCall(request).execute()
+                val json = response.body?.string() ?: ""
+                val root = com.google.gson.JsonParser.parseString(json).asJsonObject
+                if (root.get("success")?.asBoolean != true) return@Thread
+
+                val data = root.getAsJsonObject("data")
+                val serverCode = data.get("customCodeDisplay")?.asString
+                    ?: data.get("customCode")?.asString ?: return@Thread
+
+                if (serverCode.isNotBlank() && serverCode != settings.customCode) {
+                    settings.customCode = serverCode
+                    Timber.i("同步 customCode 成功: $serverCode")
+                    runOnUiThread { updateDeviceInfo() }
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "同步 customCode 失败（网络异常）")
+            }
+        }.start()
     }
 
     companion object {
