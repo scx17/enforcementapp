@@ -1,7 +1,7 @@
 package com.hdcollection.enforcement.camera
 
 import android.annotation.SuppressLint
-import android.app.Activity
+import android.content.Context
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraDevice
@@ -26,12 +26,12 @@ import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 
-class Camera2Preview(private val activity: Activity, private val surfaceView: SurfaceView) {
+class Camera2Preview(private val context: Context) {
 
     /** 解析远程配置里的分辨率字符串（形如 "1920x1080"），失败回退到 1920x1080 */
     private fun resolveVideoParams(): Triple<Int, Int, Int> {
         // 返回 (width, height, fps)；码率单独读
-        val app = activity.application as? com.hdcollection.enforcement.EnforcementApp
+        val app = context.applicationContext as? com.hdcollection.enforcement.EnforcementApp
         val cfg = app?.remoteConfigManager?.config?.value
         val resStr = cfg?.videoResolution ?: "1920x1080"
         val fps = cfg?.videoFps ?: 25
@@ -44,7 +44,7 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
     }
 
     private fun resolveVideoBitrateBps(): Int {
-        val app = activity.application as? com.hdcollection.enforcement.EnforcementApp
+        val app = context.applicationContext as? com.hdcollection.enforcement.EnforcementApp
         val kbps = app?.remoteConfigManager?.config?.value?.videoBitrateKbps ?: 2000
         return kbps * 1000
     }
@@ -78,30 +78,64 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
     private var photoCallback: ((File) -> Unit)? = null
     private var pendingPhotoFile: File? = null
 
-    private val previewSurface: Surface
-        get() = surfaceView.holder.surface
+    @Volatile
+    private var attachedSurfaceView: SurfaceView? = null
+    private var attachedSurfaceHolderCallback: android.view.SurfaceHolder.Callback? = null
 
     private fun previewSurfaceOrNull(): Surface? {
-        val s = surfaceView.holder.surface
+        val sv = attachedSurfaceView ?: return null
+        val s: Surface? = sv.holder.surface
         return if (s != null && s.isValid) s else null
     }
 
-    init {
-        surfaceView.holder.addCallback(object : android.view.SurfaceHolder.Callback {
+    fun start() {
+        if (cameraDevice != null) {
+            Timber.d("Camera2Preview.start(): camera already open, skip")
+            return
+        }
+        Timber.i("Camera2Preview.start() → openCamera")
+        openCamera()
+    }
+
+    fun stop() {
+        Timber.i("Camera2Preview.stop() → closeCamera")
+        closeCamera()
+    }
+
+    fun attachPreview(surfaceView: SurfaceView) {
+        if (attachedSurfaceView === surfaceView) return
+        detachPreview()
+        attachedSurfaceView = surfaceView
+        val cb = object : android.view.SurfaceHolder.Callback {
             override fun surfaceCreated(holder: android.view.SurfaceHolder) {
-                openCamera()
+                Timber.i("Preview surfaceCreated → rebuildCaptureSession")
+                bgHandler?.post { rebuildCaptureSession() }
             }
             override fun surfaceChanged(holder: android.view.SurfaceHolder, f: Int, w: Int, h: Int) {}
             override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
-                closeCamera()
+                Timber.i("Preview surfaceDestroyed → rebuildCaptureSession (no preview)")
+                bgHandler?.post { rebuildCaptureSession() }
             }
-        })
+        }
+        surfaceView.holder.addCallback(cb)
+        attachedSurfaceHolderCallback = cb
+        if (surfaceView.holder.surface?.isValid == true) {
+            bgHandler?.post { rebuildCaptureSession() }
+        }
+    }
+
+    fun detachPreview() {
+        val sv = attachedSurfaceView ?: return
+        attachedSurfaceHolderCallback?.let { sv.holder.removeCallback(it) }
+        attachedSurfaceHolderCallback = null
+        attachedSurfaceView = null
+        bgHandler?.post { rebuildCaptureSession() }
     }
 
     @SuppressLint("MissingPermission")
     private fun openCamera() {
         startBackgroundThread()
-        val manager = activity.getSystemService(Activity.CAMERA_SERVICE) as CameraManager
+        val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         val targetFacing = if (useFrontCamera)
             android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT
         else
@@ -116,7 +150,6 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
                 override fun onOpened(camera: CameraDevice) {
                     cameraDevice = camera
                     ensureImageReader()
-                    startPreviewSession()
                     Timber.d("Camera opened")
                     // 切换摄像头后恢复推流
                     if (pendingResumeEncoding && currentRtpIp != null) {
@@ -219,11 +252,6 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
         }
     }
 
-    /** 兼容旧调用点：回到只含 preview 的基础会话。 */
-    private fun startPreviewSession() {
-        rebuildCaptureSession()
-    }
-
     fun startEncoding(rtpIp: String, rtpPort: Int, ssrc: Int = 0) {
         if (isEncoding) return
         currentRtpIp = rtpIp
@@ -271,7 +299,10 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
 
             // 重建 capture session，包含 encoder；如果正在录像，也把 recorder.surface 一起带上并行
             val recSurfaceAtStart = if (isRecording) mediaRecorder?.surface else null
-            val surfaces = mutableListOf(previewSurface, encSurface)
+            val preview = previewSurfaceOrNull()
+            val surfaces = mutableListOf<Surface>()
+            preview?.let { surfaces.add(it) }
+            surfaces.add(encSurface)
             recSurfaceAtStart?.let { surfaces.add(it) }
             imageReader?.surface?.let { surfaces.add(it) }
 
@@ -279,7 +310,7 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
                 override fun onConfigured(session: CameraCaptureSession) {
                     captureSession = session
                     val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                        addTarget(previewSurface)
+                        preview?.let { addTarget(it) }
                         addTarget(encSurface)
                         recSurfaceAtStart?.let { addTarget(it) }
                     }
@@ -485,10 +516,10 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
 
         val (recW, recH, recFps) = resolveVideoParams()
         val recBitrateBps = resolveVideoBitrateBps()
-        val app = activity.application as? com.hdcollection.enforcement.EnforcementApp
+        val app = context.applicationContext as? com.hdcollection.enforcement.EnforcementApp
         val audioOn = app?.remoteConfigManager?.config?.value?.audioEnabled ?: true
 
-        val recorder = MediaRecorder(activity).apply {
+        val recorder = MediaRecorder(context).apply {
             if (audioOn) setAudioSource(MediaRecorder.AudioSource.CAMCORDER)
             setVideoSource(MediaRecorder.VideoSource.SURFACE)
             setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
@@ -506,7 +537,10 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
 
         // 如果正在推流，新 session 必须同时包含 encoder surface，否则推流会断
         val encSurfaceAtStart = if (isEncoding) encoderSurface else null
-        val surfaces = mutableListOf(previewSurface, recorder.surface)
+        val preview = previewSurfaceOrNull()
+        val surfaces = mutableListOf<Surface>()
+        preview?.let { surfaces.add(it) }
+        surfaces.add(recorder.surface)
         encSurfaceAtStart?.let { surfaces.add(it) }
         imageReader?.surface?.let { surfaces.add(it) }
 
@@ -515,7 +549,7 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
                 override fun onConfigured(session: CameraCaptureSession) {
                     captureSession = session
                     val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                        addTarget(previewSurface)
+                        preview?.let { addTarget(it) }
                         addTarget(recorder.surface)
                         encSurfaceAtStart?.let { addTarget(it) }
                     }

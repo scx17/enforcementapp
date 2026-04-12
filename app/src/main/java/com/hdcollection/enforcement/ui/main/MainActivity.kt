@@ -135,7 +135,9 @@ class MainActivity : AppCompatActivity(), StreamCallback {
 
         val surfaceView = findViewById<SurfaceView>(R.id.surfacePreview)
         try {
-            camera = Camera2Preview(this, surfaceView)
+            camera = Camera2Preview(this)
+            camera.start()
+            camera.attachPreview(surfaceView)
             Timber.i("Camera2Preview 初始化成功")
         } catch (e: Exception) {
             Timber.e(e, "Camera2Preview 初始化失败")
@@ -230,6 +232,12 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         voicePlayer?.release()
         shutterSound.release()
         gb28181Manager.unregister()
+        try {
+            camera.detachPreview()
+            camera.stop()
+        } catch (e: Exception) {
+            Timber.w(e, "MainActivity.onDestroy: camera cleanup 异常")
+        }
         wakeLock?.let { if (it.isHeld) it.release() }
     }
 
