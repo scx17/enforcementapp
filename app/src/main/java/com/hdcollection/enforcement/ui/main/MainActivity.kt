@@ -11,7 +11,6 @@ import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.PowerManager
 import android.view.KeyEvent
 import android.view.SurfaceView
 import android.view.View
@@ -58,7 +57,6 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
     private var isRecording = false
     private var isFlashOn = false
     private var currentRecordFile: File? = null
-    private var wakeLock: PowerManager.WakeLock? = null
     private var mediaService: MediaCaptureService? = null
     private val mediaServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -128,9 +126,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
             or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         )
-        val pm = getSystemService(POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "EnforcementApp::MainWakeLock")
-        wakeLock?.acquire()
+        // WakeLock 已由 MediaCaptureService 持有
 
         // 启动 MediaCaptureService（前台服务）
         val mediaIntent = Intent(this, MediaCaptureService::class.java)
@@ -240,7 +236,6 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         mediaService?.removeListener(this)
         mediaService?.detachPreview()
         try { unbindService(mediaServiceConnection) } catch (_: Exception) {}
-        wakeLock?.let { if (it.isHeld) it.release() }
     }
 
     private fun setupBottomButtons() {

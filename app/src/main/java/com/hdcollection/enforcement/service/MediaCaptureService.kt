@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -45,6 +46,7 @@ class MediaCaptureService : Service(), StreamCallback {
     private var gb28181Manager: GB28181Manager? = null
     private lateinit var settings: AppSettings
     private var gbNetworkCallback: ConnectivityManager.NetworkCallback? = null
+    private var wakeLock: PowerManager.WakeLock? = null
     private val listeners = java.util.concurrent.CopyOnWriteArrayList<Listener>()
 
     fun addListener(l: Listener) { listeners.add(l) }
@@ -53,6 +55,12 @@ class MediaCaptureService : Service(), StreamCallback {
     override fun onCreate() {
         super.onCreate()
         Timber.i("MediaCaptureService onCreate")
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "EnforcementApp::MediaCaptureService"
+        ).apply { acquire() }
+        Timber.i("Service WakeLock acquired")
         settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
         startForegroundWithNotification()
         camera = Camera2Preview(this).also { it.start() }
@@ -78,6 +86,9 @@ class MediaCaptureService : Service(), StreamCallback {
         camera?.detachPreview()
         camera?.stop()
         camera = null
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
+        Timber.i("Service WakeLock released")
         super.onDestroy()
     }
 
