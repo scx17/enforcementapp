@@ -1,12 +1,17 @@
 package com.hdcollection.enforcement.ui.main
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.hardware.camera2.CameraManager
 import android.media.MediaActionSound
 import android.media.MediaPlayer
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -58,6 +63,7 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     private var isFlashOn = false
     private var currentRecordFile: File? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var gbNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private val hardwareKeyReceiver = HardwareKeyReceiver()
     private val usbStateReceiver = UsbStateReceiver()
 
@@ -70,7 +76,7 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     // 按键防抖：设备同时发 KeyEvent + 广播，防止同一操作触发两次
     private var lastRecordingToggleTime = 0L
     private var lastPhotoTime = 0L
-    private val DEBOUNCE_MS = 800L
+    private val DEBOUNCE_MS = 1500L
 
     // 录像计时
     private var recordingStartTime = 0L
@@ -152,9 +158,16 @@ class MainActivity : AppCompatActivity(), StreamCallback {
             ActivityCompat.requestPermissions(this, requiredPermissions, REQUEST_PERMISSIONS)
         }
 
+        registerGbNetworkCallback()
+
         // 注册 SIP 来电监听
         (application as EnforcementApp).sipManager.onIncomingCall = { call ->
             runOnUiThread { showIncomingCallDialog(call) }
+        }
+
+        // 注册工单到达监听 — App 内弹窗 + 循环声音
+        (application as EnforcementApp).notificationService.onWorkTaskReceived = { title, priority ->
+            runOnUiThread { showWorkTaskAlert(title, priority) }
         }
 
         // 注册硬件按键广播接收器
@@ -212,6 +225,7 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         super.onDestroy()
         try { unregisterReceiver(hardwareKeyReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(usbStateReceiver) } catch (_: Exception) {}
+        unregisterGbNetworkCallback()
         recordingTimerHandler.removeCallbacks(recordingTimerRunnable)
         voicePlayer?.release()
         shutterSound.release()
@@ -244,44 +258,126 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         gb28181Manager.register()
     }
 
+    /**
+     * 注册系统网络状态回调，WiFi 恢复时立即触发 GB28181 重新注册。
+     * 解决断网后重连不会自动重注册的问题（原来要等 keepAlive 心跳累计 3 次失败约 3 分钟才感知）。
+     */
+    private fun registerGbNetworkCallback() {
+        if (gbNetworkCallback != null) return
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val req = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            val cb = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    Timber.i("GB28181 NetworkCallback: onAvailable network=$network")
+                    gb28181Manager.triggerReconnect("network onAvailable")
+                }
+
+                override fun onLost(network: Network) {
+                    Timber.i("GB28181 NetworkCallback: onLost network=$network")
+                    gb28181Manager.notifyNetworkLost("network onLost")
+                }
+
+                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                    if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                        Timber.d("GB28181 NetworkCallback: capabilities validated, network=$network")
+                        gb28181Manager.triggerReconnect("network validated")
+                    }
+                }
+            }
+            cm.registerNetworkCallback(req, cb)
+            gbNetworkCallback = cb
+            Timber.i("GB28181: 网络状态回调已注册")
+        } catch (e: Exception) {
+            Timber.w(e, "GB28181: 注册网络回调失败")
+        }
+    }
+
+    private fun unregisterGbNetworkCallback() {
+        val cb = gbNetworkCallback ?: return
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            cm.unregisterNetworkCallback(cb)
+            Timber.i("GB28181: 网络状态回调已反注册")
+        } catch (e: Exception) {
+            Timber.w(e, "GB28181: 反注册网络回调失败")
+        } finally {
+            gbNetworkCallback = null
+        }
+    }
+
     private var watermarkEnabled = false
 
     private fun updateClock() {
         val now = Date()
-        val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-        findViewById<TextView>(R.id.tvTime).text = sdf.format(now)
+        val cfg = (application as EnforcementApp).remoteConfigManager.config.value
 
-        val dateSdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        findViewById<TextView>(R.id.tvDate).text = dateSdf.format(now)
+        val tvTime = findViewById<TextView>(R.id.tvTime)
+        val tvDate = findViewById<TextView>(R.id.tvDate)
+        val tvGps = findViewById<TextView>(R.id.tvGps)
+        val tvDeviceIdOsd = findViewById<TextView>(R.id.tvDeviceId)
 
-        // 更新 GPS 信息
-        val locService = (application as EnforcementApp).locationService
-        val gpsText = if (locService.getLatitude() != 0.0) {
-            String.format("%.6f, %.6f %s", locService.getLatitude(), locService.getLongitude(), locService.getProviderDesc())
+        // 时间/日期
+        if (cfg.osdShowTime) {
+            tvTime.visibility = android.view.View.VISIBLE
+            tvDate.visibility = android.view.View.VISIBLE
+            tvTime.text = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(now)
+            tvDate.text = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(now)
         } else {
-            "定位中..."
+            tvTime.visibility = android.view.View.GONE
+            tvDate.visibility = android.view.View.GONE
         }
-        findViewById<TextView>(R.id.tvGps)?.text = gpsText
+
+        // 设备号
+        tvDeviceIdOsd?.visibility = if (cfg.osdShowDeviceId) android.view.View.VISIBLE else android.view.View.GONE
+
+        // GPS
+        if (cfg.osdShowGps) {
+            tvGps?.visibility = android.view.View.VISIBLE
+            val locService = (application as EnforcementApp).locationService
+            val gpsText = if (locService.getLatitude() != 0.0) {
+                String.format("%.6f, %.6f %s", locService.getLatitude(), locService.getLongitude(), locService.getProviderDesc())
+            } else {
+                "定位中..."
+            }
+            tvGps?.text = gpsText
+        } else {
+            tvGps?.visibility = android.view.View.GONE
+        }
+
+        // 字体大小（全部 OSD TextView 共用）
+        val fontSp = cfg.osdFontSize.coerceIn(10, 40).toFloat()
+        tvTime.textSize = fontSp
+        tvDate.textSize = fontSp * 0.75f
+        tvGps?.textSize = fontSp * 0.75f
+        tvDeviceIdOsd?.textSize = fontSp * 0.75f
 
         // 更新摄像头画面水印（硬件 OSD，直接烧录到视频帧中）
-        updateCameraWatermark(now)
+        updateCameraWatermark(now, cfg)
     }
 
-    private fun updateCameraWatermark(now: Date) {
+    private fun updateCameraWatermark(now: Date, cfg: com.hdcollection.enforcement.config.RemoteConfig) {
         try {
             val dm = android.app.devicemanager.DeviceManager.getInstance()
             if (dm == null) {
                 if (!watermarkEnabled) { Timber.w("DeviceManager 为 null，水印不可用"); watermarkEnabled = true }
                 return
             }
+            // 整体开关：只要 showTime 或 showDeviceId 有一个开启就启用水印
+            val anyOsdOn = cfg.osdShowTime || cfg.osdShowDeviceId
             if (!watermarkEnabled) {
-                dm.setCameraWaterMarkEnable(true)
+                dm.setCameraWaterMarkEnable(anyOsdOn)
                 watermarkEnabled = true
-                Timber.i("摄像头硬件水印已开启")
+                Timber.i("摄像头硬件水印初始化: enabled=$anyOsdOn")
+            } else {
+                dm.setCameraWaterMarkEnable(anyOsdOn)
             }
             val timeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-            dm.setCameraWaterMarkText(0, timeFmt.format(now))
-            dm.setCameraWaterMarkText(1, settings.deviceId)
+            dm.setCameraWaterMarkText(0, if (cfg.osdShowTime) timeFmt.format(now) else "")
+            dm.setCameraWaterMarkText(1, if (cfg.osdShowDeviceId) settings.deviceId else "")
         } catch (e: Exception) {
             if (!watermarkEnabled) {
                 Timber.w(e, "硬件水印不可用: ${e.message}")
@@ -347,7 +443,11 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     // StreamCallback 实现
     override fun onRegistered(deviceId: String) {
         Timber.i("GB28181 registered: $deviceId")
-        runOnUiThread { updateStreamStatus("注册在线", "#4CAF50") }
+        runOnUiThread {
+            updateStreamStatus("注册在线", "#4CAF50")
+            // 上线后检查未处理工单
+            checkPendingWorkTasks()
+        }
     }
 
     override fun onRegistrationFailed(reason: String) {
@@ -404,14 +504,17 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     private fun handleHardwareKey(action: HardwareKeyReceiver.KeyAction) {
         when (action) {
             HardwareKeyReceiver.KeyAction.VIDEO_PRESS -> toggleLocalRecording()
-            HardwareKeyReceiver.KeyAction.VIDEO_LONG_PRESS -> toggleLocalRecording()
+            HardwareKeyReceiver.KeyAction.VIDEO_LONG_PRESS -> { /* 忽略：PRESS 已触发一次，避免长按重复切换 */ }
             HardwareKeyReceiver.KeyAction.PHOTO_PRESS -> capturePhoto()
             HardwareKeyReceiver.KeyAction.PHOTO_LONG_PRESS -> capturePhoto()
             HardwareKeyReceiver.KeyAction.PHOTO_LONG_PRESS_CANCELED -> {}
             HardwareKeyReceiver.KeyAction.SOS_PRESS -> {
-                toggleFlashLight()
-                // 上报 SOS 告警
                 val app = application as EnforcementApp
+                if (!app.remoteConfigManager.config.value.sosEnabled) {
+                    Timber.i("SOS_PRESS ignored: sosEnabled=false (远程配置已禁用)")
+                    return
+                }
+                toggleFlashLight()
                 CoroutineScope(Dispatchers.IO).launch {
                     alarmReporter.report(
                         "sos", 3, "紧急按钮报警",
@@ -422,11 +525,14 @@ class MainActivity : AppCompatActivity(), StreamCallback {
                 }
             }
             HardwareKeyReceiver.KeyAction.SOS_LONG_PRESS -> {
+                val app = application as EnforcementApp
+                if (!app.remoteConfigManager.config.value.sosEnabled) {
+                    Timber.i("SOS_LONG_PRESS ignored: sosEnabled=false (远程配置已禁用)")
+                    return
+                }
                 LightState.strobeRedBlueOn = true
                 DeviceHardwareManager.setStrobeRedBlueBlink()
                 Timber.i("SOS: strobe red-blue blink activated")
-                // 上报 SOS 长按告警
-                val app = application as EnforcementApp
                 CoroutineScope(Dispatchers.IO).launch {
                     alarmReporter.report(
                         "sos", 3, "紧急按钮报警(长按)",
@@ -497,63 +603,29 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         if (now - lastRecordingToggleTime < DEBOUNCE_MS) return
         lastRecordingToggleTime = now
         if (isRecording) {
-            // 先保存文件引用（stopLocalRecording 后 camera 内部引用会被清除）
             val recordFile = currentRecordFile
-            val startTime = recordingStartTime
 
             camera.stopLocalRecording()
             isRecording = false
             currentRecordFile = null
             playVoice(R.raw.voice_stop_recording)
             showRecordingIndicator(false)
-            Timber.i("Local recording stopped")
+            Timber.i("Local recording stopped: ${recordFile?.name}")
 
-            // 将录像文件加入上传队列
+            // 不再自动上传：只通知平台文件清单（含缩略图），等待平台 Pull 任务或手动触发上传
             if (recordFile != null && recordFile.exists()) {
                 val app = application as EnforcementApp
-                val locService = app.locationService
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
-                        val uploadClient = okhttp3.OkHttpClient.Builder()
-                            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                            .writeTimeout(10, java.util.concurrent.TimeUnit.MINUTES)
-                            .readTimeout(5, java.util.concurrent.TimeUnit.MINUTES)
-                            .build()
-                        val uploadService = com.hdcollection.enforcement.upload.UploadService(
-                            com.hdcollection.enforcement.data.db.AppDatabase.getInstance(applicationContext).uploadQueueDao(),
-                            com.hdcollection.enforcement.data.AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE)),
-                            uploadClient
-                        )
-                        uploadService.enqueue(
-                            deviceId = settings.deviceId,
-                            fileType = "video",
-                            file = recordFile,
-                            lat = locService.getLatitude().takeIf { it != 0.0 },
-                            lng = locService.getLongitude().takeIf { it != 0.0 },
-                            recordTime = startTime
-                        )
-                        Timber.i("录像已加入上传队列: ${recordFile.name}, ${recordFile.length() / 1024}KB")
+                        app.fileSyncService.syncFileList()
+                        Timber.i("录像完成立即触发文件清单同步: ${recordFile.name}, ${recordFile.length() / 1024}KB")
                     } catch (e: Exception) {
-                        Timber.e(e, "录像入队失败")
+                        Timber.e(e, "录像完成后同步清单失败")
                     }
                 }
-
-                // 触发 WorkManager 立即执行上传任务
-                androidx.work.WorkManager.getInstance(applicationContext)
-                    .enqueueUniqueWork(
-                        "auto_upload",
-                        androidx.work.ExistingWorkPolicy.REPLACE,
-                        androidx.work.OneTimeWorkRequestBuilder<com.hdcollection.enforcement.service.UploadWorker>()
-                            .setConstraints(
-                                androidx.work.Constraints.Builder()
-                                    .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
-                                    .build()
-                            )
-                            .build()
-                    )
             }
         } else {
-            val dir = getExternalFilesDir("recordings") ?: filesDir
+            val dir = File(filesDir, "recordings").apply { mkdirs() }
             val file = File(dir, "rec_${System.currentTimeMillis()}.mp4")
             currentRecordFile = file
             camera.startLocalRecording(file)
@@ -591,14 +663,101 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         val now = System.currentTimeMillis()
         if (now - lastPhotoTime < DEBOUNCE_MS) return
         lastPhotoTime = now
-        val dir = getExternalFilesDir("photos") ?: filesDir
+        val dir = File(filesDir, "photos").apply { mkdirs() }
         val file = File(dir, "photo_${System.currentTimeMillis()}.jpg")
         // 播放快门声
         shutterSound.play(MediaActionSound.SHUTTER_CLICK)
         camera.capturePhoto(file) { savedFile ->
             Timber.i("Photo captured: ${savedFile.name}")
             runOnUiThread { playVoice(R.raw.voice_photo_taken) }
+            // 立即触发文件清单同步，让平台看到缩略图（不自动上传，等平台 Pull）
+            val app = application as EnforcementApp
+            CoroutineScope(Dispatchers.IO).launch {
+                try { app.fileSyncService.syncFileList() }
+                catch (e: Exception) { Timber.w(e, "拍照后同步清单失败") }
+            }
         }
+    }
+
+    private var workTaskToneGenerator: android.media.ToneGenerator? = null
+    private var workTaskToneHandler: Handler? = null
+    private var workTaskToneRunnable: Runnable? = null
+    private var workTaskDialog: AlertDialog? = null
+
+    private fun showWorkTaskAlert(title: String, priority: String) {
+        Timber.i("工单弹窗: title=$title, priority=$priority")
+        // 如果已有弹窗在显示，先关掉
+        workTaskDialog?.dismiss()
+
+        val toneType = when (priority) {
+            "urgent" -> android.media.ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK
+            "high" -> android.media.ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD
+            else -> android.media.ToneGenerator.TONE_CDMA_ALERT_NETWORK_LITE
+        }
+        val interval = when (priority) {
+            "urgent" -> 2000L; "high" -> 4000L; else -> 6000L
+        }
+
+        // 循环响铃
+        stopWorkTaskTone()
+        workTaskToneGenerator = android.media.ToneGenerator(android.media.AudioManager.STREAM_ALARM, 100)
+        workTaskToneHandler = Handler(Looper.getMainLooper())
+        workTaskToneRunnable = object : Runnable {
+            override fun run() {
+                workTaskToneGenerator?.startTone(toneType, 1000)
+                workTaskToneHandler?.postDelayed(this, interval)
+            }
+        }
+        workTaskToneRunnable?.run()
+
+        val priorityLabel = when (priority) { "urgent" -> "【紧急】"; "high" -> "【高】"; else -> "" }
+
+        workTaskDialog = AlertDialog.Builder(this)
+            .setTitle("${priorityLabel}新工单")
+            .setMessage(title)
+            .setCancelable(false)
+            .setPositiveButton("阅读") { d, _ ->
+                stopWorkTaskTone()
+                d.dismiss()
+                workTaskDialog = null
+                isNavigatingInternally = true
+                // 自动标记所有未阅工单为已阅，然后打开工单列表
+                com.hdcollection.enforcement.ui.worktask.WorkTaskListActivity.markAllAsRead(
+                    settings.platformApiUrl, settings.deviceId
+                )
+                val intent = Intent(this@MainActivity, com.hdcollection.enforcement.ui.worktask.WorkTaskListActivity::class.java)
+                startActivity(intent)
+            }
+            .create()
+        workTaskDialog?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        workTaskDialog?.show()
+    }
+
+    /** 上线时检查未阅读/执行中工单 */
+    private fun checkPendingWorkTasks() {
+        val settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
+        if (settings.platformApiUrl.isEmpty()) return
+        com.hdcollection.enforcement.ui.worktask.WorkTaskListActivity.checkPendingTasks(
+            settings.platformApiUrl, settings.deviceId
+        ) { unread, inProgress ->
+            if (unread > 0) {
+                showWorkTaskAlert("您有 $unread 条未阅读工单", if (unread >= 3) "urgent" else "normal")
+            } else if (inProgress > 0) {
+                // 执行中未完成，提醒一次
+                val tg = android.media.ToneGenerator(android.media.AudioManager.STREAM_ALARM, 80)
+                tg.startTone(android.media.ToneGenerator.TONE_CDMA_ALERT_NETWORK_LITE, 1500)
+                Handler(Looper.getMainLooper()).postDelayed({ tg.release() }, 2000)
+                android.widget.Toast.makeText(this, "您有 $inProgress 条执行中工单未完成", android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun stopWorkTaskTone() {
+        workTaskToneRunnable?.let { workTaskToneHandler?.removeCallbacks(it) }
+        workTaskToneGenerator?.release()
+        workTaskToneGenerator = null
+        workTaskToneHandler = null
+        workTaskToneRunnable = null
     }
 
     private fun showIncomingCallDialog(callerUri: String) {

@@ -72,6 +72,11 @@
             android:screenOrientation="portrait" />
 
         <activity
+            android:name=".ui.upload.ManualUploadActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <activity
             android:name=".ui.function.FunctionActivity"
             android:exported="false"
             android:screenOrientation="portrait" />
@@ -80,6 +85,12 @@
             android:name=".ui.notification.NotificationListActivity"
             android:exported="false"
             android:screenOrientation="portrait" />
+
+        <activity
+            android:name=".ui.worktask.WorkTaskListActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:label="作业工单" />
 
         <activity
             android:name=".ui.playback.VideoPlayerActivity"

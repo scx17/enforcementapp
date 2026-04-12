@@ -26,6 +26,10 @@ class LocationService(private val context: Context) {
 
     var onLocationChanged: ((Location) -> Unit)? = null
 
+    private var gpsMinIntervalMs: Long = 10_000L
+    private var started: Boolean = false
+    private var currentEnabled: Boolean = true
+
     private val gpsListener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
             Timber.d("GPS 定位更新: ${location.latitude}, ${location.longitude} 精度=${location.accuracy}m 来源=${location.provider}")
@@ -61,13 +65,16 @@ class LocationService(private val context: Context) {
      */
     @SuppressLint("MissingPermission")
     fun start() {
+        if (started) return
+        val mainLooper = android.os.Looper.getMainLooper()
         // 1. GPS 硬件定位（精度高，室外有效）
         if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
             locationManager.requestLocationUpdates(
                 LocationManager.GPS_PROVIDER,
-                10_000L,    // 最小更新间隔 10 秒
-                5f,         // 最小移动距离 5 米
-                gpsListener
+                gpsMinIntervalMs,    // 最小更新间隔（来自远程配置）
+                5f,                  // 最小移动距离 5 米
+                gpsListener,
+                mainLooper
             )
             // 获取上次已知位置作为初始值
             locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)?.let {
@@ -85,7 +92,8 @@ class LocationService(private val context: Context) {
                 LocationManager.NETWORK_PROVIDER,
                 30_000L,    // 30 秒更新
                 50f,        // 50 米移动
-                networkListener
+                networkListener,
+                mainLooper
             )
             // 如果 GPS 没有初始位置，用网络定位的
             if (currentLocation == null) {
@@ -101,6 +109,39 @@ class LocationService(private val context: Context) {
 
         // 定期上报位置到平台
         startReporting()
+        started = true
+        Timber.i("LocationService 已启动: gpsMinInterval=${gpsMinIntervalMs}ms")
+    }
+
+    /**
+     * 根据远程配置热切换：开关 + 间隔
+     */
+    fun applyConfig(enabled: Boolean, intervalSeconds: Int) {
+        val newMs = intervalSeconds.coerceAtLeast(1).toLong() * 1000L
+        val intervalChanged = newMs != gpsMinIntervalMs
+        val enabledChanged = enabled != currentEnabled
+        currentEnabled = enabled
+        gpsMinIntervalMs = newMs
+
+        if (!enabled) {
+            if (started) {
+                stop()
+                Timber.i("LocationService applyConfig: 已停止（远程 gpsEnabled=false）")
+            }
+            return
+        }
+        // enabled=true
+        if (!started) {
+            start()
+            Timber.i("LocationService applyConfig: 已启动 interval=${intervalSeconds}s")
+        } else if (intervalChanged) {
+            // 间隔变化：重启以应用新 interval
+            stop()
+            start()
+            Timber.i("LocationService applyConfig: interval 已热切换至 ${intervalSeconds}s")
+        } else if (enabledChanged) {
+            Timber.i("LocationService applyConfig: 已处于启动状态，无变更")
+        }
     }
 
     private var reportTimer: java.util.Timer? = null
@@ -151,6 +192,7 @@ class LocationService(private val context: Context) {
         reportTimer = null
         locationManager.removeUpdates(gpsListener)
         locationManager.removeUpdates(networkListener)
+        started = false
         Timber.i("定位服务已停止")
     }
 

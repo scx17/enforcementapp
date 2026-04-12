@@ -69,13 +69,14 @@ Content-Length: 0
         fromHeader: String,
         toHeader: String,
         cseq: String,
+        viaHeader: String,
         localIp: String,
         rtpPort: Int,
         ssrc: String
     ): String {
         val sdp = buildSdp(localIp, rtpPort, ssrc)
         return """SIP/2.0 200 OK
-Via: ${extractVia(fromHeader)}
+Via: $viaHeader
 From: $fromHeader
 To: $toHeader;tag=enforceapp
 Call-ID: $callId
@@ -85,6 +86,24 @@ Content-Type: application/sdp
 Content-Length: ${sdp.length}
 
 $sdp""".replace("\n", "\r\n")
+    }
+
+    fun buildMessageOk(
+        callId: String,
+        fromHeader: String,
+        toHeader: String,
+        cseq: String,
+        viaHeader: String
+    ): String {
+        return """SIP/2.0 200 OK
+Via: $viaHeader
+From: $fromHeader
+To: $toHeader;tag=enforceapp
+Call-ID: $callId
+CSeq: $cseq
+Content-Length: 0
+
+""".replace("\n", "\r\n")
     }
 
     fun buildBye(callId: String): String {
@@ -103,7 +122,7 @@ c=IN IP4 $localIp
 t=0 0
 m=video $rtpPort RTP/AVP 96
 a=rtpmap:96 PS/90000
-a=recvonly
+a=sendonly
 y=$ssrc
 """.replace("\n", "\r\n")
     }

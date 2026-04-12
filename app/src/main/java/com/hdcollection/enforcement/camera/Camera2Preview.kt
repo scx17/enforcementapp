@@ -28,15 +28,41 @@ import java.nio.ByteBuffer
 
 class Camera2Preview(private val activity: Activity, private val surfaceView: SurfaceView) {
 
+    /** 解析远程配置里的分辨率字符串（形如 "1920x1080"），失败回退到 1920x1080 */
+    private fun resolveVideoParams(): Triple<Int, Int, Int> {
+        // 返回 (width, height, fps)；码率单独读
+        val app = activity.application as? com.hdcollection.enforcement.EnforcementApp
+        val cfg = app?.remoteConfigManager?.config?.value
+        val resStr = cfg?.videoResolution ?: "1920x1080"
+        val fps = cfg?.videoFps ?: 25
+        return try {
+            val (w, h) = resStr.split("x", "X").let { it[0].toInt() to it[1].toInt() }
+            Triple(w, h, fps)
+        } catch (_: Exception) {
+            Triple(1920, 1080, fps)
+        }
+    }
+
+    private fun resolveVideoBitrateBps(): Int {
+        val app = activity.application as? com.hdcollection.enforcement.EnforcementApp
+        val kbps = app?.remoteConfigManager?.config?.value?.videoBitrateKbps ?: 2000
+        return kbps * 1000
+    }
+
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var bgThread: HandlerThread? = null
     private var bgHandler: Handler? = null
 
     private var mediaCodec: MediaCodec? = null
+    private var encoderSurface: Surface? = null // 推流编码器 Surface 缓存，用于 session 并存时复用
     private var rtpSender: RtpSender? = null
     private var encoderThread: Thread? = null
     private var isEncoding = false
+    private var currentRtpIp: String? = null
+    private var currentRtpPort: Int = 0
+    private var currentSsrc: Int = 0
+    private var pendingResumeEncoding = false
 
     private var mediaRecorder: MediaRecorder? = null
     private var isRecording = false
@@ -86,6 +112,14 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
                     cameraDevice = camera
                     startPreviewSession()
                     Timber.d("Camera opened")
+                    // 切换摄像头后恢复推流
+                    if (pendingResumeEncoding && currentRtpIp != null) {
+                        pendingResumeEncoding = false
+                        bgHandler?.postDelayed({
+                            Timber.i("切换摄像头后恢复推流: $currentRtpIp:$currentRtpPort")
+                            startEncoding(currentRtpIp!!, currentRtpPort, currentSsrc)
+                        }, 300)
+                    }
                 }
                 override fun onDisconnected(camera: CameraDevice) {
                     camera.close()
@@ -103,9 +137,8 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
         }
     }
 
-    private fun startPreviewSession() {
-        val camera = cameraDevice ?: return
-        val surfaces = mutableListOf(previewSurface)
+    private fun ensureImageReader() {
+        if (imageReader != null) return
         Timber.i("ImageReader 初始化: 1920x1080, JPEG, maxImages=2")
         imageReader = ImageReader.newInstance(1920, 1080, ImageFormat.JPEG, 2).also {
             it.setOnImageAvailableListener({ reader ->
@@ -123,39 +156,84 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
                     }
                 }
             }, bgHandler)
-            surfaces.add(it.surface)
         }
+    }
+
+    /**
+     * 根据当前推流/录像状态重建 CaptureSession。
+     * 同一个 session 里同时包含 preview、推流编码器、录像 MediaRecorder 三个 Surface，
+     * 让录像和推流真正并行，切换时画面流不中断。
+     */
+    private fun rebuildCaptureSession() {
+        val camera = cameraDevice ?: return
+        ensureImageReader()
+
+        val useEncoder = isEncoding && encoderSurface != null
+        val useRecorder = isRecording && mediaRecorder != null
+        val recSurface = if (useRecorder) mediaRecorder?.surface else null
+
+        val surfaces = mutableListOf<Surface>()
+        surfaces.add(previewSurface)
+        if (useEncoder) surfaces.add(encoderSurface!!)
+        if (recSurface != null) surfaces.add(recSurface)
+        imageReader?.surface?.let { surfaces.add(it) }
+
+        val template = if (useEncoder || useRecorder)
+            CameraDevice.TEMPLATE_RECORD
+        else
+            CameraDevice.TEMPLATE_PREVIEW
 
         try {
             camera.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
-                    captureSession = session
-                    val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                        addTarget(previewSurface)
+                    if (cameraDevice == null) {
+                        Timber.w("rebuildCaptureSession: camera closed during onConfigured, skip")
+                        return
                     }
-                    session.setRepeatingRequest(request.build(), null, bgHandler)
+                    captureSession = session
+                    try {
+                        val request = camera.createCaptureRequest(template).apply {
+                            addTarget(previewSurface)
+                            if (useEncoder) addTarget(encoderSurface!!)
+                            if (recSurface != null) addTarget(recSurface)
+                        }
+                        session.setRepeatingRequest(request.build(), null, bgHandler)
+                        Timber.i("Session 重建成功: encoder=$useEncoder, recorder=$useRecorder, template=${if (template == CameraDevice.TEMPLATE_RECORD) "RECORD" else "PREVIEW"}")
+                    } catch (e: IllegalStateException) {
+                        Timber.w(e, "rebuildCaptureSession: camera closed during setRepeatingRequest")
+                    }
                 }
                 override fun onConfigureFailed(session: CameraCaptureSession) {
-                    Timber.e("Camera session configure failed")
+                    Timber.e("Session 重建失败: encoder=$useEncoder, recorder=$useRecorder")
                 }
             }, bgHandler)
         } catch (e: Exception) {
-            Timber.e(e, "Failed to create capture session")
+            Timber.e(e, "Session 重建异常")
         }
+    }
+
+    /** 兼容旧调用点：回到只含 preview 的基础会话。 */
+    private fun startPreviewSession() {
+        rebuildCaptureSession()
     }
 
     fun startEncoding(rtpIp: String, rtpPort: Int, ssrc: Int = 0) {
         if (isEncoding) return
+        currentRtpIp = rtpIp
+        currentRtpPort = rtpPort
+        currentSsrc = ssrc
         val camera = cameraDevice ?: run {
             Timber.w("Camera not open, cannot start encoding")
             return
         }
 
         try {
+            val (encW, encH, encFps) = resolveVideoParams()
+            val encBitrateBps = resolveVideoBitrateBps()
             // 创建 MediaCodec H.264 编码器（低延迟配置）
-            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, 1920, 1080).apply {
-                setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000)
-                setInteger(MediaFormat.KEY_FRAME_RATE, 25)
+            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, encW, encH).apply {
+                setInteger(MediaFormat.KEY_BIT_RATE, encBitrateBps)
+                setInteger(MediaFormat.KEY_FRAME_RATE, encFps)
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
                 setInteger(MediaFormat.KEY_COLOR_FORMAT,
                     MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
@@ -170,12 +248,13 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
                 setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
                 setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel31)
             }
-            Timber.i("编码参数: 分辨率=1920x1080, 码率=2000kbps, 帧率=25fps, Profile=Baseline, CBR模式")
+            Timber.i("编码参数: 分辨率=${encW}x${encH}, 码率=${encBitrateBps/1000}kbps, 帧率=${encFps}fps, Profile=Baseline, CBR模式")
             val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            val encoderSurface = codec.createInputSurface()
+            val encSurface = codec.createInputSurface()
             codec.start()
             mediaCodec = codec
+            encoderSurface = encSurface
 
             // 启动 RTP 发送（使用 SDP 指定的 SSRC）
             val sender = RtpSender(rtpIp, rtpPort)
@@ -183,8 +262,10 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
             sender.start()
             rtpSender = sender
 
-            // 重建 capture session，加入编码器 Surface
-            val surfaces = mutableListOf(previewSurface, encoderSurface)
+            // 重建 capture session，包含 encoder；如果正在录像，也把 recorder.surface 一起带上并行
+            val recSurfaceAtStart = if (isRecording) mediaRecorder?.surface else null
+            val surfaces = mutableListOf(previewSurface, encSurface)
+            recSurfaceAtStart?.let { surfaces.add(it) }
             imageReader?.surface?.let { surfaces.add(it) }
 
             camera.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
@@ -192,13 +273,14 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
                     captureSession = session
                     val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                         addTarget(previewSurface)
-                        addTarget(encoderSurface)
+                        addTarget(encSurface)
+                        recSurfaceAtStart?.let { addTarget(it) }
                     }
                     session.setRepeatingRequest(request.build(), null, bgHandler)
                     isEncoding = true
                     startEncoderOutputLoop()
                     startAudioEncoding()
-                    Timber.i("Camera encoding started (video+audio) -> $rtpIp:$rtpPort")
+                    Timber.i("Camera encoding started (video+audio) -> $rtpIp:$rtpPort, withRecorder=${recSurfaceAtStart != null}")
                 }
                 override fun onConfigureFailed(session: CameraCaptureSession) {
                     Timber.e("Encoding session configure failed")
@@ -361,12 +443,14 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
 
         mediaCodec?.apply { stop(); release() }
         mediaCodec = null
+        try { encoderSurface?.release() } catch (_: Exception) {}
+        encoderSurface = null
         rtpSender?.stop()
         rtpSender = null
 
-        // 恢复预览 session（不含编码器 Surface）
-        startPreviewSession()
-        Timber.i("Camera encoding stopped (video+audio)")
+        // 重建会话：若仍在录像则保留录像 surface，否则退到预览
+        rebuildCaptureSession()
+        Timber.i("Camera encoding stopped (video+audio), isRecording=$isRecording")
     }
 
     fun capturePhoto(outputFile: File, callback: (File) -> Unit) {
@@ -392,22 +476,31 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
         if (isRecording) return
         val camera = cameraDevice ?: return
 
+        val (recW, recH, recFps) = resolveVideoParams()
+        val recBitrateBps = resolveVideoBitrateBps()
+        val app = activity.application as? com.hdcollection.enforcement.EnforcementApp
+        val audioOn = app?.remoteConfigManager?.config?.value?.audioEnabled ?: true
+
         val recorder = MediaRecorder(activity).apply {
-            setAudioSource(MediaRecorder.AudioSource.CAMCORDER)
+            if (audioOn) setAudioSource(MediaRecorder.AudioSource.CAMCORDER)
             setVideoSource(MediaRecorder.VideoSource.SURFACE)
             setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             setOutputFile(outputFile.absolutePath)
-            setVideoEncodingBitRate(4_000_000)
-            setVideoFrameRate(30)
-            setVideoSize(1920, 1080)
+            setVideoEncodingBitRate(recBitrateBps)
+            setVideoFrameRate(recFps)
+            setVideoSize(recW, recH)
             setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            if (audioOn) setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
             prepare()
         }
+        Timber.i("本地录像参数: 分辨率=${recW}x${recH}, 码率=${recBitrateBps/1000}kbps, 帧率=${recFps}fps, audio=$audioOn")
         mediaRecorder = recorder
         currentRecordingFile = outputFile
 
+        // 如果正在推流，新 session 必须同时包含 encoder surface，否则推流会断
+        val encSurfaceAtStart = if (isEncoding) encoderSurface else null
         val surfaces = mutableListOf(previewSurface, recorder.surface)
+        encSurfaceAtStart?.let { surfaces.add(it) }
         imageReader?.surface?.let { surfaces.add(it) }
 
         try {
@@ -417,11 +510,12 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
                     val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                         addTarget(previewSurface)
                         addTarget(recorder.surface)
+                        encSurfaceAtStart?.let { addTarget(it) }
                     }
                     session.setRepeatingRequest(request.build(), null, bgHandler)
                     recorder.start()
                     isRecording = true
-                    Timber.i("Local recording started: ${outputFile.name}")
+                    Timber.i("Local recording started: ${outputFile.name}, withEncoder=${encSurfaceAtStart != null}")
                 }
                 override fun onConfigureFailed(session: CameraCaptureSession) {
                     Timber.e("Recording session configure failed")
@@ -443,15 +537,17 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
             Timber.e(e, "Error stopping recorder")
         }
         mediaRecorder = null
-        startPreviewSession()
-        Timber.i("Local recording stopped: ${currentRecordingFile?.name}")
+        // 重建会话：若还在推流则保留 encoder surface 不断流，否则退到预览
+        rebuildCaptureSession()
+        Timber.i("Local recording stopped: ${currentRecordingFile?.name}, isEncoding=$isEncoding")
         currentRecordingFile = null
     }
 
     /** 切换前置/后置摄像头 */
     fun switchCamera() {
+        pendingResumeEncoding = isEncoding
         useFrontCamera = !useFrontCamera
-        Timber.i("切换摄像头: front=$useFrontCamera")
+        Timber.i("切换摄像头: front=$useFrontCamera, resumeEncoding=$pendingResumeEncoding")
         closeCamera()
         openCamera()
     }

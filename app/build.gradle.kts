@@ -40,6 +40,9 @@ android {
 }
 
 dependencies {
+    // 执法仪厂商硬件 SDK
+    compileOnly(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar"))))
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)

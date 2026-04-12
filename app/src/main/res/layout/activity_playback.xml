@@ -59,4 +59,100 @@
         android:layout_height="0dp"
         android:layout_weight="1" />
 
+    <!-- 底部操作栏 -->
+    <LinearLayout
+        android:id="@+id/uploadBar"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="16dp"
+        android:background="#1A237E">
+
+        <!-- 正常模式 -->
+        <LinearLayout
+            android:id="@+id/normalBar"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <Button
+                android:id="@+id/btnUploadAll"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:text="全部上传"
+                android:textSize="13sp"
+                android:textColor="#ffffff"
+                android:backgroundTint="#409EFF" />
+
+            <Button
+                android:id="@+id/btnManage"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginStart="12dp"
+                android:text="管理"
+                android:textSize="13sp"
+                android:textColor="#ffffff"
+                android:backgroundTint="#E6A23C" />
+
+            <TextView
+                android:id="@+id/tvUploadTip"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="12dp"
+                android:textColor="#80FFFFFF"
+                android:textSize="12sp"
+                android:text="点击单个文件的上传按钮或全部上传" />
+
+        </LinearLayout>
+
+        <!-- 管理模式（默认隐藏） -->
+        <LinearLayout
+            android:id="@+id/manageBar"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:visibility="gone">
+
+            <Button
+                android:id="@+id/btnDeleteSelected"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:text="删除选中 (0)"
+                android:textSize="13sp"
+                android:textColor="#ffffff"
+                android:backgroundTint="#F56C6C"
+                android:enabled="false" />
+
+            <Button
+                android:id="@+id/btnSelectAll"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginStart="12dp"
+                android:text="全选"
+                android:textSize="13sp"
+                android:textColor="#ffffff"
+                android:backgroundTint="#409EFF" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <Button
+                android:id="@+id/btnCancelManage"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:text="取消"
+                android:textSize="13sp"
+                android:textColor="#ffffff"
+                android:backgroundTint="#909399" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
 </LinearLayout>

@@ -5,27 +5,8 @@
     android:layout_height="match_parent"
     android:background="#000000"
     android:columnCount="2"
-    android:rowCount="3"
+    android:rowCount="4"
     android:padding="16dp">
-
-    <!-- 文件上传 -->
-    <LinearLayout
-        android:id="@+id/btnFileUpload"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:background="?attr/selectableItemBackground"
-        android:padding="8dp">
-        <TextView android:layout_width="48dp" android:layout_height="48dp"
-            android:gravity="center" android:textSize="28sp" android:text="📤"
-            android:background="#1A237E" />
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="文件上传" android:textColor="#FFFFFF" android:textSize="13sp"
-            android:layout_marginTop="6dp" />
-    </LinearLayout>
 
     <!-- 集群对讲 -->
     <LinearLayout
@@ -119,6 +100,25 @@
             android:background="#1A237E" />
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
             android:text="灯光控制" android:textColor="#FFFFFF" android:textSize="13sp"
+            android:layout_marginTop="6dp" />
+    </LinearLayout>
+
+    <!-- 作业工单 -->
+    <LinearLayout
+        android:id="@+id/btnWorkTask"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_columnWeight="1"
+        android:layout_rowWeight="1"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="?attr/selectableItemBackground"
+        android:padding="8dp">
+        <TextView android:layout_width="48dp" android:layout_height="48dp"
+            android:gravity="center" android:textSize="28sp" android:text="📝"
+            android:background="#1A237E" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="作业工单" android:textColor="#FFFFFF" android:textSize="13sp"
             android:layout_marginTop="6dp" />
     </LinearLayout>
 

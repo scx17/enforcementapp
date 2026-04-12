@@ -14,6 +14,7 @@ import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.service.UploadWorker
 import com.hdcollection.enforcement.ui.LightPanelFragment
 import com.hdcollection.enforcement.ui.notification.NotificationListActivity
+import com.hdcollection.enforcement.ui.worktask.WorkTaskListActivity
 import timber.log.Timber
 import java.io.File
 
@@ -26,11 +27,6 @@ class FunctionActivity : AppCompatActivity() {
         setContentView(R.layout.activity_function)
 
         settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
-
-        // 文件上传 —— 立即触发 UploadWorker
-        findViewById<LinearLayout>(R.id.btnFileUpload).setOnClickListener {
-            triggerUpload()
-        }
 
         // 集群对讲 —— 呼叫指挥中心 SIP URI
         findViewById<LinearLayout>(R.id.btnGroupIntercom).setOnClickListener {
@@ -66,15 +62,11 @@ class FunctionActivity : AppCompatActivity() {
         findViewById<LinearLayout>(R.id.btnLightControl).setOnClickListener {
             LightPanelFragment().show(supportFragmentManager, "light_panel")
         }
-    }
 
-    private fun triggerUpload() {
-        val request = OneTimeWorkRequestBuilder<UploadWorker>().build()
-        WorkManager.getInstance(this).enqueueUniqueWork(
-            "manual_upload", ExistingWorkPolicy.REPLACE, request
-        )
-        Toast.makeText(this, "已触发文件上传", Toast.LENGTH_SHORT).show()
-        Timber.i("Manual upload triggered")
+        // 作业工单
+        findViewById<LinearLayout>(R.id.btnWorkTask).setOnClickListener {
+            startActivity(Intent(this, WorkTaskListActivity::class.java))
+        }
     }
 
     private fun showLogFiles() {
@@ -89,7 +81,7 @@ class FunctionActivity : AppCompatActivity() {
     private fun capturePhoto() {
         // Camera2Preview 需要 SurfaceView，从主界面调用
         // 此处通过广播通知 MainActivity 拍照
-        val dir = getExternalFilesDir("photos") ?: filesDir
+        val dir = File(filesDir, "photos").apply { mkdirs() }
         val file = File(dir, "photo_${System.currentTimeMillis()}.jpg")
         Timber.i("Photo capture requested from FunctionActivity: ${file.name}")
         Toast.makeText(this, "请在主界面使用物理键拍照", Toast.LENGTH_SHORT).show()

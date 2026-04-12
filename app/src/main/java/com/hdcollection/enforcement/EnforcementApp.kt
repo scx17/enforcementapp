@@ -2,18 +2,27 @@ package com.hdcollection.enforcement
 
 import android.app.Application
 import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import java.util.concurrent.TimeUnit
+import okhttp3.MediaType.Companion.toMediaType
+import com.hdcollection.enforcement.config.RemoteConfigManager
 import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.logging.FileLoggingTree
 import com.hdcollection.enforcement.notification.PlatformNotificationService
+import com.hdcollection.enforcement.service.AlarmReporter
+import com.hdcollection.enforcement.service.LogUploadWorker
 import com.hdcollection.enforcement.service.UploadWorker
 import com.hdcollection.enforcement.sip.SipManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
 import java.io.File
 import java.text.SimpleDateFormat
@@ -32,6 +41,14 @@ class EnforcementApp : Application() {
 
     lateinit var locationService: com.hdcollection.enforcement.service.LocationService
         private set
+
+    lateinit var fileSyncService: com.hdcollection.enforcement.sync.FileListSyncService
+        private set
+
+    lateinit var remoteConfigManager: RemoteConfigManager
+        private set
+
+    private val pullMutex = kotlinx.coroutines.sync.Mutex()
 
     override fun onCreate() {
         super.onCreate()
@@ -53,29 +70,224 @@ class EnforcementApp : Application() {
         val settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
         sipManager = SipManager(settings)
         CoroutineScope(Dispatchers.IO).launch {
-            sipManager.start()
+            try {
+                sipManager.start()
+                Timber.i("SipManager 启动成功")
+            } catch (e: Exception) {
+                Timber.e(e, "SipManager 启动异常")
+            }
         }
 
         // 初始化 GPS 定位
         locationService = com.hdcollection.enforcement.service.LocationService(this)
-        locationService.start()
+        try {
+            locationService.start()
+            Timber.i("LocationService 启动成功")
+        } catch (e: Exception) {
+            Timber.e(e, "LocationService 启动异常")
+        }
+
+        // 初始化远程配置管理器（先于 SignalR 连接，确保监听启动时 manager 已就绪）
+        remoteConfigManager = RemoteConfigManager(this, settings)
+        Timber.i("RemoteConfigManager 初始化完成: version=${remoteConfigManager.config.value.version}")
 
         // 初始化 SignalR 平台通知
         notificationService = PlatformNotificationService(this, settings)
+        notificationService.onConfigPushReceived = { json ->
+            remoteConfigManager.applyPush(json)
+        }
         CoroutineScope(Dispatchers.IO).launch {
-            notificationService.connect()
+            try {
+                notificationService.connect()
+                Timber.i("PlatformNotificationService 连接成功")
+            } catch (e: Exception) {
+                Timber.e(e, "PlatformNotificationService 连接失败")
+            }
         }
 
-        // 注册网络恢复时自动触发上传
-        val uploadRequest = OneTimeWorkRequestBuilder<UploadWorker>()
+        // 取消旧版自动上传任务（已改为服务器拉取模式）
+        WorkManager.getInstance(this).cancelUniqueWork("auto_upload")
+        Timber.i("已取消旧版自动上传任务")
+
+        // 文件列表定期同步（每 5 分钟，上报本地文件清单到服务器）
+        val syncClient = okhttp3.OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .build()
+        fileSyncService = com.hdcollection.enforcement.sync.FileListSyncService(this, settings, syncClient)
+        val syncTimer = java.util.Timer()
+        syncTimer.scheduleAtFixedRate(object : java.util.TimerTask() {
+            override fun run() {
+                CoroutineScope(Dispatchers.IO).launch {
+                    fileSyncService.syncFileList()
+                }
+            }
+        }, 30_000, 5 * 60 * 1000) // 30秒后开始，每5分钟一次
+        Timber.i("文件列表同步定时器已启动（每5分钟）")
+
+        // 监听服务器 PullFile 命令 → 上传指定文件（串行化避免并发竞争）
+        notificationService.onPullFileRequested = { fileName ->
+            CoroutineScope(Dispatchers.IO).launch {
+                pullMutex.withLock {
+                    pullAndUploadFile(fileName, settings)
+                }
+            }
+        }
+
+        // 注册日志定时上传（每 6 小时）
+        val logUploadRequest = PeriodicWorkRequestBuilder<LogUploadWorker>(6, TimeUnit.HOURS)
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.CONNECTED)
                     .build()
             )
             .build()
-        WorkManager.getInstance(this).enqueueUniqueWork(
-            "auto_upload", ExistingWorkPolicy.REPLACE, uploadRequest
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "log_upload", ExistingPeriodicWorkPolicy.KEEP, logUploadRequest
         )
+        Timber.i("WorkManager 日志上传任务已注册: log_upload (每6小时)")
+
+        // 注册本地存储清理任务（每天一次，阈值由远程配置 storageAutoCleanDays 决定）
+        val storageCleanRequest = PeriodicWorkRequestBuilder<com.hdcollection.enforcement.service.StorageCleanupWorker>(
+            1, TimeUnit.DAYS
+        ).build()
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "storage_cleanup", ExistingPeriodicWorkPolicy.KEEP, storageCleanRequest
+        )
+        Timber.i("WorkManager 存储清理任务已注册: storage_cleanup (每日)")
+
+        // 订阅远程配置：GPS 热切换
+        CoroutineScope(Dispatchers.IO).launch {
+            remoteConfigManager.config.collect { cfg ->
+                try {
+                    locationService.applyConfig(cfg.gpsEnabled, cfg.gpsIntervalSeconds)
+                } catch (e: Exception) {
+                    Timber.e(e, "LocationService applyConfig 失败")
+                }
+            }
+        }
+
+        // 注册低电量告警广播监听
+        val batteryReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
+                val level = intent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
+                Timber.w("低电量告警: level=$level%")
+                val reporter = AlarmReporter(settings)
+                CoroutineScope(Dispatchers.IO).launch {
+                    reporter.report(
+                        "low_battery", 2, "电池低压报警",
+                        "设备 ${settings.deviceId} 电量不足 ${level}%"
+                    )
+                }
+            }
+        }
+        registerReceiver(batteryReceiver, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_LOW))
+        Timber.i("低电量告警监听已注册")
+
+        // 设备心跳定时器（每 15 秒上报一次，维持在线状态）
+        val heartbeatClient = okhttp3.OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(5, TimeUnit.SECONDS)
+            .build()
+        val heartbeatFailCount = java.util.concurrent.atomic.AtomicInteger(0)
+        val heartbeatTimer = java.util.Timer()
+        heartbeatTimer.scheduleAtFixedRate(object : java.util.TimerTask() {
+            override fun run() {
+                if (settings.platformApiUrl.isEmpty() || settings.deviceId.isEmpty()) return
+                try {
+                    val json = """{"deviceId":"${settings.deviceId}"}"""
+                    val body = okhttp3.RequestBody.create(
+                        "application/json".toMediaType(), json.toByteArray()
+                    )
+                    val request = okhttp3.Request.Builder()
+                        .url("${settings.platformApiUrl}/api/map/heartbeat")
+                        .post(body)
+                        .build()
+                    heartbeatClient.newCall(request).execute().use { resp ->
+                        if (resp.isSuccessful) {
+                            val prev = heartbeatFailCount.getAndSet(0)
+                            if (prev > 0) {
+                                Timber.i("心跳恢复: 此前连续失败 $prev 次")
+                            }
+                        } else {
+                            val cnt = heartbeatFailCount.incrementAndGet()
+                            Timber.w("心跳 HTTP ${resp.code}, 连续失败 $cnt 次")
+                            if (cnt == 3) notificationService.triggerReconnect()
+                        }
+                    }
+                } catch (e: Exception) {
+                    val cnt = heartbeatFailCount.incrementAndGet()
+                    Timber.w("心跳异常: ${e.message}, 连续失败 $cnt 次")
+                    // 连续失败 3 次（约 45 秒）强制 SignalR 走一次重连，避免双链路都哑
+                    if (cnt == 3) {
+                        Timber.e("心跳连续失败 3 次，触发 SignalR 立即重连")
+                        notificationService.triggerReconnect()
+                    }
+                }
+            }
+        }, 5000, 15000) // 5秒后开始，每15秒一次
+        Timber.i("设备心跳定时器已启动（每15秒）")
+    }
+
+    /** 服务器拉取命令回调：查找本地文件并上传 */
+    private suspend fun pullAndUploadFile(fileName: String, settings: AppSettings) {
+        val recDir = File(filesDir, "recordings")
+        val photoDir = File(filesDir, "photos")
+        val file = listOfNotNull(
+            recDir?.let { java.io.File(it, fileName) },
+            photoDir?.let { java.io.File(it, fileName) }
+        ).firstOrNull { it.exists() }
+
+        if (file == null) {
+            Timber.w("PullFile: 本地文件不存在: $fileName, 上报失败给服务器")
+            reportPullFileMissing(fileName, settings)
+            return
+        }
+
+        val fileType = if (file.extension in listOf("mp4", "3gp")) "video" else "image"
+        val uploadClient = okhttp3.OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(10, TimeUnit.MINUTES)
+            .readTimeout(5, TimeUnit.MINUTES)
+            .build()
+        val uploadService = com.hdcollection.enforcement.upload.UploadService(
+            com.hdcollection.enforcement.data.db.AppDatabase.getInstance(this).uploadQueueDao(),
+            settings, uploadClient, this
+        )
+
+        uploadService.enqueue(
+            deviceId = settings.deviceId,
+            fileType = fileType,
+            file = file,
+            lat = null, lng = null,
+            recordTime = file.lastModified()
+        )
+        uploadService.processPendingUploads()
+        Timber.i("PullFile 上传完成: $fileName")
+    }
+
+    /** 文件不存在时，上报 status=3 让后端知道拉取失败 */
+    private suspend fun reportPullFileMissing(fileName: String, settings: AppSettings) {
+        kotlinx.coroutines.withContext(Dispatchers.IO) {
+            try {
+                val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.getDefault())
+                val json = """[{"deviceId":"${settings.deviceId}","fileName":"$fileName","fileSize":0,"uploadedSize":0,"status":3,"fileType":"video","recordTime":"${dateFormat.format(java.util.Date())}"}]"""
+                val body = okhttp3.RequestBody.create(
+                    "application/json".toMediaType(), json.toByteArray()
+                )
+                val request = okhttp3.Request.Builder()
+                    .url("${settings.platformApiUrl}/api/device-file/report-upload-status")
+                    .post(body)
+                    .build()
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .readTimeout(10, TimeUnit.SECONDS)
+                    .build()
+                client.newCall(request).execute().close()
+                Timber.i("已上报文件缺失: $fileName")
+            } catch (e: Exception) {
+                Timber.e(e, "上报文件缺失失败: $fileName")
+            }
+        }
     }
 }

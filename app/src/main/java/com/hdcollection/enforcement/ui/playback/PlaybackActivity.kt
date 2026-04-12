@@ -11,6 +11,7 @@ import android.provider.MediaStore
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.CheckBox
 import android.widget.ImageView
 import android.widget.TextView
 import android.widget.VideoView
@@ -23,6 +24,9 @@ import androidx.viewpager2.adapter.FragmentStateAdapter
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
 import com.hdcollection.enforcement.R
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import timber.log.Timber
 import java.io.File
 import java.text.SimpleDateFormat
@@ -39,6 +43,275 @@ class PlaybackActivity : AppCompatActivity() {
         val tabLayout = findViewById<TabLayout>(R.id.tabLayout)
 
         viewPager.adapter = PlaybackPagerAdapter(this)
+        TabLayoutMediator(tabLayout, viewPager) { tab, position ->
+            tab.text = if (position == 0) "视频回放" else "图片回放"
+        }.attach()
+
+        // 全部上传按钮
+        findViewById<android.widget.Button>(R.id.btnUploadAll).setOnClickListener {
+            uploadAllFiles()
+        }
+
+        // 加载已上传文件状态
+        loadUploadedStates()
+
+        // 管理模式
+        findViewById<android.widget.Button>(R.id.btnManage).setOnClickListener {
+            enterManageMode()
+        }
+        findViewById<android.widget.Button>(R.id.btnCancelManage).setOnClickListener {
+            exitManageMode()
+        }
+        findViewById<android.widget.Button>(R.id.btnDeleteSelected).setOnClickListener {
+            confirmDeleteSelected()
+        }
+        findViewById<android.widget.Button>(R.id.btnSelectAll).setOnClickListener {
+            selectAllUploaded()
+        }
+    }
+
+    // 当前活跃的 fragment adapter 引用，由 fragment 设置
+    internal var currentAdapter: MediaFileAdapter? = null
+    internal var currentFiles: List<File>? = null
+
+    private fun uploadAllFiles() {
+        val adapter = currentAdapter
+        val files = currentFiles
+        if (adapter == null || files == null || files.isEmpty()) {
+            android.widget.Toast.makeText(this, "没有可上传的文件", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        uploadAllFromAdapter(files, adapter)
+    }
+
+    // 全局上传状态跟踪：文件路径 → 状态（uploaded / uploading / failed）
+    val uploadStates = mutableMapOf<String, String>()
+
+    // 管理模式状态
+    var isManageMode = false
+    val selectedFiles = mutableSetOf<String>()
+
+    private val db by lazy {
+        com.hdcollection.enforcement.data.db.AppDatabase.getInstance(this)
+    }
+
+    /** 从 DB 加载已上传文件状态 */
+    private fun loadUploadedStates() {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val uploadedPaths = db.uploadQueueDao().getUploadedFilePaths()
+                uploadedPaths.forEach { path -> uploadStates[path] = "uploaded" }
+                Timber.i("加载已上传文件状态: ${uploadedPaths.size} 个文件")
+                runOnUiThread {
+                    currentAdapter?.notifyDataSetChanged()
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "加载已上传状态失败")
+            }
+        }
+    }
+
+    private val uploadClient by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .writeTimeout(10, java.util.concurrent.TimeUnit.MINUTES)
+            .readTimeout(5, java.util.concurrent.TimeUnit.MINUTES)
+            .build()
+    }
+
+    private val uploadService by lazy {
+        val settings = com.hdcollection.enforcement.data.AppSettings(
+            getSharedPreferences("app_settings", MODE_PRIVATE))
+        com.hdcollection.enforcement.upload.UploadService(
+            com.hdcollection.enforcement.data.db.AppDatabase.getInstance(this).uploadQueueDao(),
+            settings, uploadClient, applicationContext)
+    }
+
+    /** 单文件上传，由 Adapter 调用，进度直接反映在列表项上 */
+    internal fun uploadSingleFile(file: File, adapter: MediaFileAdapter, position: Int) {
+        val settings = com.hdcollection.enforcement.data.AppSettings(
+            getSharedPreferences("app_settings", MODE_PRIVATE))
+        if (settings.deviceId.isEmpty() || settings.platformApiUrl.isEmpty()) {
+            android.widget.Toast.makeText(this, "请先配置平台地址和设备ID", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (uploadStates[file.absolutePath] == "uploaded" || uploadStates[file.absolutePath] == "uploading") return
+
+        uploadStates[file.absolutePath] = "uploading"
+        adapter.notifyItemChanged(position)
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val type = if (file.extension in listOf("mp4", "3gp")) "video" else "image"
+                uploadService.enqueue(settings.deviceId, type, file, null, null, file.lastModified())
+                uploadService.processPendingUploads()
+                uploadStates[file.absolutePath] = "uploaded"
+            } catch (e: Exception) {
+                Timber.e(e, "上传失败: ${file.name}")
+                uploadStates[file.absolutePath] = "failed"
+            }
+            runOnUiThread { adapter.notifyItemChanged(position) }
+        }
+    }
+
+    /** 全部上传 */
+    internal fun uploadAllFromAdapter(files: List<File>, adapter: MediaFileAdapter) {
+        val settings = com.hdcollection.enforcement.data.AppSettings(
+            getSharedPreferences("app_settings", MODE_PRIVATE))
+        if (settings.deviceId.isEmpty() || settings.platformApiUrl.isEmpty()) {
+            android.widget.Toast.makeText(this, "请先配置平台地址和设备ID", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        val pending = files.filterIndexed { i, f ->
+            val state = uploadStates[f.absolutePath]
+            state != "uploaded" && state != "uploading"
+        }
+        if (pending.isEmpty()) {
+            android.widget.Toast.makeText(this, "没有待上传文件", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        pending.forEach { f -> uploadStates[f.absolutePath] = "uploading" }
+        adapter.notifyDataSetChanged()
+
+        CoroutineScope(Dispatchers.IO).launch {
+            pending.forEachIndexed { idx, file ->
+                try {
+                    val type = if (file.extension in listOf("mp4", "3gp")) "video" else "image"
+                    uploadService.enqueue(settings.deviceId, type, file, null, null, file.lastModified())
+                    uploadService.processPendingUploads()
+                    uploadStates[file.absolutePath] = "uploaded"
+                } catch (e: Exception) {
+                    Timber.e(e, "上传失败: ${file.name}")
+                    uploadStates[file.absolutePath] = "failed"
+                }
+                val pos = files.indexOf(file)
+                if (pos >= 0) runOnUiThread { adapter.notifyItemChanged(pos) }
+            }
+            runOnUiThread {
+                val ok = pending.count { uploadStates[it.absolutePath] == "uploaded" }
+                val fail = pending.size - ok
+                val msg = if (fail == 0) "全部上传完成 ($ok)" else "上传完成: $ok 成功, $fail 失败"
+                android.widget.Toast.makeText(this@PlaybackActivity, msg, android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun enterManageMode() {
+        isManageMode = true
+        selectedFiles.clear()
+        findViewById<View>(R.id.normalBar).visibility = View.GONE
+        findViewById<View>(R.id.manageBar).visibility = View.VISIBLE
+        updateDeleteButtonText()
+        currentAdapter?.notifyDataSetChanged()
+    }
+
+    private fun exitManageMode() {
+        isManageMode = false
+        selectedFiles.clear()
+        findViewById<View>(R.id.normalBar).visibility = View.VISIBLE
+        findViewById<View>(R.id.manageBar).visibility = View.GONE
+        currentAdapter?.notifyDataSetChanged()
+    }
+
+    internal fun updateDeleteButtonText() {
+        val btn = findViewById<android.widget.Button>(R.id.btnDeleteSelected)
+        val count = selectedFiles.size
+        btn.text = "删除选中 ($count)"
+        btn.isEnabled = count > 0
+    }
+
+    private fun selectAllUploaded() {
+        val files = currentFiles ?: return
+        val uploadedFiles = files.filter { uploadStates[it.absolutePath] == "uploaded" }
+        if (selectedFiles.size == uploadedFiles.size) {
+            selectedFiles.clear()
+        } else {
+            selectedFiles.clear()
+            uploadedFiles.forEach { selectedFiles.add(it.absolutePath) }
+        }
+        updateDeleteButtonText()
+        currentAdapter?.notifyDataSetChanged()
+    }
+
+    /** 单个删除确认 */
+    internal fun confirmDeleteSingle(file: java.io.File) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("确认删除")
+            .setMessage("该文件已上传至服务器，删除本地文件不影响服务器副本。\n\n确定删除 ${file.name}？")
+            .setPositiveButton("删除") { _, _ -> deleteSingleFile(file) }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun deleteSingleFile(file: java.io.File) {
+        val path = file.absolutePath
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                file.delete()
+                db.uploadQueueDao().deleteByFilePath(path)
+                uploadStates.remove(path)
+                Timber.i("已删除本地文件: ${file.name}")
+                runOnUiThread {
+                    refreshCurrentFragment()
+                    android.widget.Toast.makeText(this@PlaybackActivity, "已删除", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "删除文件失败: ${file.name}")
+                runOnUiThread {
+                    android.widget.Toast.makeText(this@PlaybackActivity, "删除失败", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun confirmDeleteSelected() {
+        val count = selectedFiles.size
+        if (count == 0) return
+        android.app.AlertDialog.Builder(this)
+            .setTitle("批量删除")
+            .setMessage("确定删除 $count 个已上传文件？\n本地删除不影响服务器副本。")
+            .setPositiveButton("删除") { _, _ -> deleteSelectedFiles() }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun deleteSelectedFiles() {
+        val paths = selectedFiles.toList()
+        CoroutineScope(Dispatchers.IO).launch {
+            var deleted = 0
+            var failed = 0
+            paths.forEach { path ->
+                try {
+                    val file = java.io.File(path)
+                    if (file.exists()) file.delete()
+                    deleted++
+                } catch (e: Exception) {
+                    Timber.e(e, "删除文件失败: $path")
+                    failed++
+                }
+            }
+            try {
+                db.uploadQueueDao().deleteByFilePaths(paths)
+            } catch (e: Exception) {
+                Timber.e(e, "清除DB记录失败")
+            }
+            paths.forEach { uploadStates.remove(it) }
+            Timber.i("批量删除完成: $deleted 成功, $failed 失败")
+            runOnUiThread {
+                exitManageMode()
+                refreshCurrentFragment()
+                val msg = if (failed == 0) "已删除 $deleted 个文件" else "删除 $deleted 成功, $failed 失败"
+                android.widget.Toast.makeText(this@PlaybackActivity, msg, android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun refreshCurrentFragment() {
+        val viewPager = findViewById<androidx.viewpager2.widget.ViewPager2>(R.id.viewPager)
+        val currentItem = viewPager.currentItem
+        viewPager.adapter = PlaybackPagerAdapter(this)
+        viewPager.setCurrentItem(currentItem, false)
+        val tabLayout = findViewById<com.google.android.material.tabs.TabLayout>(R.id.tabLayout)
         TabLayoutMediator(tabLayout, viewPager) { tab, position ->
             tab.text = if (position == 0) "视频回放" else "图片回放"
         }.attach()
@@ -63,7 +336,7 @@ class MediaListFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         val dirName = arguments?.getString(ARG_DIR) ?: "recordings"
-        val dir = requireActivity().getExternalFilesDir(dirName) ?: requireActivity().filesDir
+        val dir = File(requireActivity().filesDir, dirName)
         val files = dir.listFiles()
             ?.filter { it.isFile }
             ?.sortedByDescending { it.lastModified() }
@@ -77,15 +350,21 @@ class MediaListFragment : Fragment() {
 
         Timber.d("PlaybackActivity: found ${files.size} files in $dirName")
 
+        val activity = requireActivity() as PlaybackActivity
         val recycler = view.findViewById<RecyclerView>(R.id.recyclerView)
         recycler.layoutManager = LinearLayoutManager(requireContext())
-        recycler.adapter = MediaFileAdapter(files, isVideo) { file ->
+        val adapter = MediaFileAdapter(files, isVideo, activity.uploadStates, activity, onClick = { file ->
             if (isVideo) {
                 playVideo(file)
             } else {
                 viewImage(file)
             }
-        }
+        }, onUpload = { file, adapterRef, position ->
+            activity.uploadSingleFile(file, adapterRef, position)
+        })
+        recycler.adapter = adapter
+        activity.currentAdapter = adapter
+        activity.currentFiles = files
     }
 
     private fun playVideo(file: File) {
@@ -139,16 +418,24 @@ class MediaListFragment : Fragment() {
 class MediaFileAdapter(
     private val files: List<File>,
     private val isVideo: Boolean,
-    private val onClick: (File) -> Unit
+    private val uploadStates: Map<String, String>,
+    private val activity: PlaybackActivity,
+    private val onClick: (File) -> Unit,
+    private val onUpload: (File, MediaFileAdapter, Int) -> Unit
 ) : RecyclerView.Adapter<MediaFileAdapter.ViewHolder>() {
 
     inner class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+        val cbSelect: CheckBox = view.findViewById(R.id.cbSelect)
         val ivThumbnail: ImageView = view.findViewById(R.id.ivThumbnail)
         val ivPlayIcon: ImageView = view.findViewById(R.id.ivPlayIcon)
         val tvDuration: TextView = view.findViewById(R.id.tvDuration)
         val tvFileName: TextView = view.findViewById(R.id.tvFileName)
         val tvFileInfo: TextView = view.findViewById(R.id.tvFileInfo)
-        val tvUploadStatus: TextView = view.findViewById(R.id.tvUploadStatus)
+        val btnUpload: android.widget.Button = view.findViewById(R.id.btnUpload)
+        val progressUpload: android.widget.ProgressBar = view.findViewById(R.id.progressUpload)
+        val layoutUploaded: View = view.findViewById(R.id.layoutUploaded)
+        val tvUploaded: TextView = view.findViewById(R.id.tvUploaded)
+        val btnDelete: ImageView = view.findViewById(R.id.btnDelete)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
@@ -158,8 +445,32 @@ class MediaFileAdapter(
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val file = files[position]
+        val state = uploadStates[file.absolutePath]
+        val isUploaded = state == "uploaded"
 
-        // 文件名 — 更友好的显示
+        // CheckBox — 管理模式下，已上传的文件显示
+        if (activity.isManageMode && isUploaded) {
+            holder.cbSelect.visibility = View.VISIBLE
+            holder.cbSelect.setOnCheckedChangeListener(null)
+            holder.cbSelect.isChecked = activity.selectedFiles.contains(file.absolutePath)
+            holder.cbSelect.setOnCheckedChangeListener { _, isChecked ->
+                if (isChecked) {
+                    activity.selectedFiles.add(file.absolutePath)
+                } else {
+                    activity.selectedFiles.remove(file.absolutePath)
+                }
+                activity.updateDeleteButtonText()
+            }
+            holder.itemView.setOnClickListener {
+                holder.cbSelect.isChecked = !holder.cbSelect.isChecked
+            }
+        } else {
+            holder.cbSelect.visibility = View.GONE
+            holder.cbSelect.setOnCheckedChangeListener(null)
+            holder.itemView.setOnClickListener { onClick(file) }
+        }
+
+        // 文件名
         val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
             .format(Date(file.lastModified()))
         holder.tvFileName.text = dateStr
@@ -172,8 +483,42 @@ class MediaFileAdapter(
             String.format("%.0f KB", file.length() / 1024.0)
         }
 
-        holder.tvUploadStatus.text = "待上传"
-        holder.itemView.setOnClickListener { onClick(file) }
+        // 上传状态切换显示
+        when (state) {
+            "uploading" -> {
+                holder.btnUpload.visibility = View.GONE
+                holder.progressUpload.visibility = View.VISIBLE
+                holder.progressUpload.isIndeterminate = true
+                holder.layoutUploaded.visibility = View.GONE
+            }
+            "uploaded" -> {
+                holder.btnUpload.visibility = View.GONE
+                holder.progressUpload.visibility = View.GONE
+                holder.layoutUploaded.visibility = View.VISIBLE
+                holder.tvUploaded.text = "已上传"
+                holder.tvUploaded.setTextColor(0xFF67C23A.toInt())
+                holder.btnDelete.visibility = if (activity.isManageMode) View.GONE else View.VISIBLE
+                holder.btnDelete.setOnClickListener {
+                    activity.confirmDeleteSingle(file)
+                }
+            }
+            "failed" -> {
+                holder.btnUpload.visibility = View.VISIBLE
+                holder.btnUpload.text = "重试"
+                holder.btnUpload.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFF56C6C.toInt())
+                holder.progressUpload.visibility = View.GONE
+                holder.layoutUploaded.visibility = View.GONE
+            }
+            else -> {
+                holder.btnUpload.visibility = View.VISIBLE
+                holder.btnUpload.text = "上传"
+                holder.btnUpload.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFF409EFF.toInt())
+                holder.progressUpload.visibility = View.GONE
+                holder.layoutUploaded.visibility = View.GONE
+            }
+        }
+
+        holder.btnUpload.setOnClickListener { onUpload(file, this, position) }
 
         // 缩略图
         if (isVideo) {
@@ -190,23 +535,14 @@ class MediaFileAdapter(
         try {
             val retriever = MediaMetadataRetriever()
             retriever.setDataSource(file.absolutePath)
-
-            // 获取视频帧作为缩略图
-            val bitmap = retriever.getFrameAtTime(1_000_000) // 1秒处
-            if (bitmap != null) {
-                imageView.setImageBitmap(bitmap)
-            }
-
-            // 获取时长
+            val bitmap = retriever.getFrameAtTime(1_000_000)
+            if (bitmap != null) imageView.setImageBitmap(bitmap)
             val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
             if (durationMs != null) {
                 val totalSec = durationMs / 1000
-                val min = totalSec / 60
-                val sec = totalSec % 60
-                tvDuration.text = String.format("%02d:%02d", min, sec)
+                tvDuration.text = String.format("%02d:%02d", totalSec / 60, totalSec % 60)
                 tvDuration.visibility = View.VISIBLE
             }
-
             retriever.release()
         } catch (e: Exception) {
             Timber.w(e, "Failed to load video thumbnail: ${file.name}")
@@ -215,22 +551,14 @@ class MediaFileAdapter(
 
     private fun loadImageThumbnail(imageView: ImageView, file: File) {
         try {
-            // 先读取尺寸
             val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(file.absolutePath, options)
-
-            // 计算采样率（目标宽 192px）
             val targetWidth = 192
             var sampleSize = 1
-            if (options.outWidth > targetWidth) {
-                sampleSize = options.outWidth / targetWidth
-            }
-
+            if (options.outWidth > targetWidth) sampleSize = options.outWidth / targetWidth
             val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
             val bitmap = BitmapFactory.decodeFile(file.absolutePath, decodeOptions)
-            if (bitmap != null) {
-                imageView.setImageBitmap(bitmap)
-            }
+            if (bitmap != null) imageView.setImageBitmap(bitmap)
         } catch (e: Exception) {
             Timber.w(e, "Failed to load image thumbnail: ${file.name}")
         }

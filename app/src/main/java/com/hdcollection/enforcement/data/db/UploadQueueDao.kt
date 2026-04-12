@@ -24,4 +24,13 @@ interface UploadQueueDao {
 
     @Query("SELECT COUNT(*) FROM upload_queue WHERE status = 'pending'")
     suspend fun pendingCount(): Int
+
+    @Query("SELECT filePath FROM upload_queue WHERE status = 'done'")
+    suspend fun getUploadedFilePaths(): List<String>
+
+    @Query("DELETE FROM upload_queue WHERE filePath = :filePath AND status = 'done'")
+    suspend fun deleteByFilePath(filePath: String)
+
+    @Query("DELETE FROM upload_queue WHERE filePath IN (:filePaths) AND status = 'done'")
+    suspend fun deleteByFilePaths(filePaths: List<String>)
 }
