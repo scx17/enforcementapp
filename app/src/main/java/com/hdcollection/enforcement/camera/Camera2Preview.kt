@@ -81,6 +81,11 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
     private val previewSurface: Surface
         get() = surfaceView.holder.surface
 
+    private fun previewSurfaceOrNull(): Surface? {
+        val s = surfaceView.holder.surface
+        return if (s != null && s.isValid) s else null
+    }
+
     init {
         surfaceView.holder.addCallback(object : android.view.SurfaceHolder.Callback {
             override fun surfaceCreated(holder: android.view.SurfaceHolder) {
@@ -110,6 +115,7 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
             manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     cameraDevice = camera
+                    ensureImageReader()
                     startPreviewSession()
                     Timber.d("Camera opened")
                     // 切换摄像头后恢复推流
@@ -171,9 +177,10 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
         val useEncoder = isEncoding && encoderSurface != null
         val useRecorder = isRecording && mediaRecorder != null
         val recSurface = if (useRecorder) mediaRecorder?.surface else null
+        val preview = previewSurfaceOrNull()
 
         val surfaces = mutableListOf<Surface>()
-        surfaces.add(previewSurface)
+        preview?.let { surfaces.add(it) }
         if (useEncoder) surfaces.add(encoderSurface!!)
         if (recSurface != null) surfaces.add(recSurface)
         imageReader?.surface?.let { surfaces.add(it) }
@@ -193,18 +200,18 @@ class Camera2Preview(private val activity: Activity, private val surfaceView: Su
                     captureSession = session
                     try {
                         val request = camera.createCaptureRequest(template).apply {
-                            addTarget(previewSurface)
+                            preview?.let { addTarget(it) }
                             if (useEncoder) addTarget(encoderSurface!!)
                             if (recSurface != null) addTarget(recSurface)
                         }
                         session.setRepeatingRequest(request.build(), null, bgHandler)
-                        Timber.i("Session 重建成功: encoder=$useEncoder, recorder=$useRecorder, template=${if (template == CameraDevice.TEMPLATE_RECORD) "RECORD" else "PREVIEW"}")
+                        Timber.i("Session 重建成功: preview=${preview != null}, encoder=$useEncoder, recorder=$useRecorder, template=${if (template == CameraDevice.TEMPLATE_RECORD) "RECORD" else "PREVIEW"}")
                     } catch (e: IllegalStateException) {
                         Timber.w(e, "rebuildCaptureSession: camera closed during setRepeatingRequest")
                     }
                 }
                 override fun onConfigureFailed(session: CameraCaptureSession) {
-                    Timber.e("Session 重建失败: encoder=$useEncoder, recorder=$useRecorder")
+                    Timber.e("Session 重建失败: preview=${preview != null}, encoder=$useEncoder, recorder=$useRecorder")
                 }
             }, bgHandler)
         } catch (e: Exception) {
