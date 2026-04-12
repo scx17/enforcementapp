@@ -40,8 +40,12 @@ import com.hdcollection.enforcement.ui.LightPanelFragment
 import com.hdcollection.enforcement.ui.function.FunctionActivity
 import com.hdcollection.enforcement.ui.playback.PlaybackActivity
 import com.hdcollection.enforcement.service.AlarmReporter
+import com.hdcollection.enforcement.service.MediaCaptureService
 import com.hdcollection.enforcement.receiver.UsbStateReceiver
 import com.hdcollection.enforcement.ui.settings.SettingsActivity
+import android.content.ComponentName
+import android.content.ServiceConnection
+import android.os.IBinder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -64,6 +68,17 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     private var currentRecordFile: File? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var gbNetworkCallback: ConnectivityManager.NetworkCallback? = null
+    private var mediaService: MediaCaptureService? = null
+    private val mediaServiceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            mediaService = (binder as? MediaCaptureService.LocalBinder)?.getService()
+            Timber.i("MediaCaptureService connected")
+        }
+        override fun onServiceDisconnected(name: ComponentName?) {
+            mediaService = null
+            Timber.w("MediaCaptureService disconnected")
+        }
+    }
     private val hardwareKeyReceiver = HardwareKeyReceiver()
     private val usbStateReceiver = UsbStateReceiver()
 
@@ -122,6 +137,11 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "EnforcementApp::MainWakeLock")
         wakeLock?.acquire()
+
+        // 启动 MediaCaptureService（前台服务）
+        val mediaIntent = Intent(this, MediaCaptureService::class.java)
+        ContextCompat.startForegroundService(this, mediaIntent)
+        bindService(mediaIntent, mediaServiceConnection, Context.BIND_AUTO_CREATE)
 
         settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
         alarmReporter = AlarmReporter(settings)
@@ -238,6 +258,7 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         } catch (e: Exception) {
             Timber.w(e, "MainActivity.onDestroy: camera cleanup 异常")
         }
+        try { unbindService(mediaServiceConnection) } catch (_: Exception) {}
         wakeLock?.let { if (it.isHeld) it.release() }
     }
 
