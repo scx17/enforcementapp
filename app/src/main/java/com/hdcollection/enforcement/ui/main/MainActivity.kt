@@ -29,7 +29,6 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.hdcollection.enforcement.EnforcementApp
 import com.hdcollection.enforcement.R
-import com.hdcollection.enforcement.camera.Camera2Preview
 import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.gb28181.GB28181Manager
 import com.hdcollection.enforcement.gb28181.StreamCallback
@@ -59,7 +58,6 @@ class MainActivity : AppCompatActivity(), StreamCallback {
 
     private lateinit var settings: AppSettings
     private lateinit var gb28181Manager: GB28181Manager
-    private lateinit var camera: Camera2Preview
     private lateinit var alarmReporter: AlarmReporter
 
     private var isNavigatingInternally = false
@@ -71,8 +69,10 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     private var mediaService: MediaCaptureService? = null
     private val mediaServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            mediaService = (binder as? MediaCaptureService.LocalBinder)?.getService()
+            val svc = (binder as? MediaCaptureService.LocalBinder)?.getService()
+            mediaService = svc
             Timber.i("MediaCaptureService connected")
+            svc?.attachPreview(findViewById(R.id.surfacePreview))
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             mediaService = null
@@ -153,16 +153,7 @@ class MainActivity : AppCompatActivity(), StreamCallback {
             throw e
         }
 
-        val surfaceView = findViewById<SurfaceView>(R.id.surfacePreview)
-        try {
-            camera = Camera2Preview(this)
-            camera.start()
-            camera.attachPreview(surfaceView)
-            Timber.i("Camera2Preview 初始化成功")
-        } catch (e: Exception) {
-            Timber.e(e, "Camera2Preview 初始化失败")
-            throw e
-        }
+        // Camera 已由 MediaCaptureService 持有并 start，preview 在 onServiceConnected 中 attach
 
         // 预加载快门音
         shutterSound.load(MediaActionSound.SHUTTER_CLICK)
@@ -252,12 +243,7 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         voicePlayer?.release()
         shutterSound.release()
         gb28181Manager.unregister()
-        try {
-            camera.detachPreview()
-            camera.stop()
-        } catch (e: Exception) {
-            Timber.w(e, "MainActivity.onDestroy: camera cleanup 异常")
-        }
+        mediaService?.detachPreview()
         try { unbindService(mediaServiceConnection) } catch (_: Exception) {}
         wakeLock?.let { if (it.isHeld) it.release() }
     }
@@ -277,8 +263,8 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         }
         // 切换前后摄像头
         findViewById<ImageButton>(R.id.btnSwitchCamera).setOnClickListener {
-            camera.switchCamera()
-            Timber.i("摄像头切换: front=${camera.isFrontCamera()}")
+            mediaService?.switchCamera()
+            Timber.i("摄像头切换: front=${mediaService?.isFrontCamera()}")
         }
     }
 
@@ -487,12 +473,12 @@ class MainActivity : AppCompatActivity(), StreamCallback {
     override fun onStreamStartRequested(channelId: String, rtpIp: String, rtpPort: Int, ssrc: Int) {
         Timber.i("Stream start requested: $channelId -> $rtpIp:$rtpPort ssrc=$ssrc")
         runOnUiThread { updateStreamStatus("推流中", "#2196F3") }
-        camera.startEncoding(rtpIp, rtpPort, ssrc)
+        mediaService?.startEncoding(rtpIp, rtpPort, ssrc)
     }
 
     override fun onStreamStopRequested(channelId: String) {
         Timber.i("Stream stop requested: $channelId")
-        camera.stopEncoding()
+        mediaService?.stopEncoding()
         runOnUiThread { updateStreamStatus("注册在线", "#4CAF50") }
     }
 
@@ -634,7 +620,7 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         if (isRecording) {
             val recordFile = currentRecordFile
 
-            camera.stopLocalRecording()
+            mediaService?.stopLocalRecording()
             isRecording = false
             currentRecordFile = null
             playVoice(R.raw.voice_stop_recording)
@@ -657,7 +643,7 @@ class MainActivity : AppCompatActivity(), StreamCallback {
             val dir = File(filesDir, "recordings").apply { mkdirs() }
             val file = File(dir, "rec_${System.currentTimeMillis()}.mp4")
             currentRecordFile = file
-            camera.startLocalRecording(file)
+            mediaService?.startLocalRecording(file)
             isRecording = true
             recordingStartTime = System.currentTimeMillis()
             playVoice(R.raw.voice_start_recording)
@@ -696,7 +682,7 @@ class MainActivity : AppCompatActivity(), StreamCallback {
         val file = File(dir, "photo_${System.currentTimeMillis()}.jpg")
         // 播放快门声
         shutterSound.play(MediaActionSound.SHUTTER_CLICK)
-        camera.capturePhoto(file) { savedFile ->
+        mediaService?.capturePhoto(file) { savedFile ->
             Timber.i("Photo captured: ${savedFile.name}")
             runOnUiThread { playVoice(R.raw.voice_photo_taken) }
             // 立即触发文件清单同步，让平台看到缩略图（不自动上传，等平台 Pull）

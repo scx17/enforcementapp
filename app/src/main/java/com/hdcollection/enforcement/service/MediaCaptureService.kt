@@ -11,10 +11,13 @@ import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.view.SurfaceView
 import androidx.core.app.NotificationCompat
 import com.hdcollection.enforcement.R
+import com.hdcollection.enforcement.camera.Camera2Preview
 import com.hdcollection.enforcement.ui.main.MainActivity
 import timber.log.Timber
+import java.io.File
 
 class MediaCaptureService : Service() {
 
@@ -23,11 +26,14 @@ class MediaCaptureService : Service() {
     }
 
     private val binder = LocalBinder()
+    private var camera: Camera2Preview? = null
 
     override fun onCreate() {
         super.onCreate()
         Timber.i("MediaCaptureService onCreate")
         startForegroundWithNotification()
+        camera = Camera2Preview(this).also { it.start() }
+        Timber.i("Camera2Preview 已在 Service 内启动")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -39,8 +45,22 @@ class MediaCaptureService : Service() {
 
     override fun onDestroy() {
         Timber.i("MediaCaptureService onDestroy")
+        camera?.detachPreview()
+        camera?.stop()
+        camera = null
         super.onDestroy()
     }
+
+    // —— 给 Activity 用的代理方法 ——
+    fun attachPreview(surfaceView: SurfaceView) { camera?.attachPreview(surfaceView) }
+    fun detachPreview() { camera?.detachPreview() }
+    fun capturePhoto(out: File, cb: (File) -> Unit) { camera?.capturePhoto(out, cb) }
+    fun startLocalRecording(out: File) { camera?.startLocalRecording(out) }
+    fun stopLocalRecording() { camera?.stopLocalRecording() }
+    fun switchCamera() { camera?.switchCamera() }
+    fun isFrontCamera(): Boolean = camera?.isFrontCamera() ?: false
+    fun startEncoding(rtpIp: String, rtpPort: Int, ssrc: Int) { camera?.startEncoding(rtpIp, rtpPort, ssrc) }
+    fun stopEncoding() { camera?.stopEncoding() }
 
     private fun startForegroundWithNotification() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
