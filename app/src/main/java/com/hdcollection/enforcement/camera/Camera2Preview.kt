@@ -212,6 +212,14 @@ class Camera2Preview(private val context: Context) {
         val recSurface = if (useRecorder) mediaRecorder?.surface else null
         val preview = previewSurfaceOrNull()
 
+        // 没有任何活跃输出 → 无需 capture session（息屏 + 未推流 + 未录像时的正常状态）
+        if (preview == null && !useEncoder && recSurface == null) {
+            captureSession?.close()
+            captureSession = null
+            Timber.i("rebuildCaptureSession: 无活跃 target, 关闭 session (息屏待命)")
+            return
+        }
+
         val surfaces = mutableListOf<Surface>()
         preview?.let { surfaces.add(it) }
         if (useEncoder) surfaces.add(encoderSurface!!)

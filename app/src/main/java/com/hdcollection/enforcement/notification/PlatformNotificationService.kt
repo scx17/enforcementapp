@@ -168,6 +168,26 @@ class PlatformNotificationService(
                 }
             }, String::class.java)
 
+            // 监听管理员强制改名（平台→设备）
+            conn.on("CustomCodeChanged", { data: String ->
+                try {
+                    Timber.i("收到编号变更: $data")
+                    val json = org.json.JSONObject(data)
+                    val newCode = json.optString("customCodeDisplay", json.optString("customCode", ""))
+                    val updatedAt = json.optLong("updatedAt", 0L)
+                    if (newCode.isNotBlank()) {
+                        settings.customCode = newCode
+                        if (updatedAt > 0) settings.customCodeUpdatedAt = updatedAt
+                        Timber.i("设备编号已同步: newCode=$newCode")
+                        val notification = PlatformNotification("设备编号已更新为: $newCode")
+                        notifications.add(0, notification)
+                        onNotificationReceived?.invoke(notification)
+                    }
+                } catch (e: Exception) {
+                    Timber.e(e, "CustomCodeChanged 处理失败")
+                }
+            }, String::class.java)
+
             connection = conn
 
             Timber.i("SignalR: 正在连接...")

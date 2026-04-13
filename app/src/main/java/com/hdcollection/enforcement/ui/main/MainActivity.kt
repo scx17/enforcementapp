@@ -186,16 +186,19 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
     override fun onPause() {
         super.onPause()
         clockHandler.removeCallbacks(clockRunnable)
-        // 仅在被系统切走时拉回前台（内部导航不拦截）
+        // 仅在屏幕亮着且被系统切走时拉回前台（息屏不拉回，让 Activity 正常进 onStop）
         if (!isNavigatingInternally) {
-            Handler(Looper.getMainLooper()).postDelayed({
-                if (!isFinishing && !isNavigatingInternally) {
-                    val intent = Intent(this, MainActivity::class.java).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            val pm = getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+            if (pm.isInteractive) {
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if (!isFinishing && !isNavigatingInternally) {
+                        val intent = Intent(this, MainActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                        }
+                        startActivity(intent)
                     }
-                    startActivity(intent)
-                }
-            }, 300)
+                }, 300)
+            }
         }
     }
 

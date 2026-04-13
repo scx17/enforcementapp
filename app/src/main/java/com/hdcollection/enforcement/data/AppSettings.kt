@@ -28,6 +28,14 @@ class AppSettings(private val prefs: SharedPreferences) {
         get() = prefs.getString("device_id", "") ?: ""
         set(v) = prefs.edit().putString("device_id", v).apply()
 
+    var customCode: String
+        get() = prefs.getString("custom_code", "") ?: ""
+        set(v) = prefs.edit().putString("custom_code", v).apply()
+
+    var customCodeUpdatedAt: Long
+        get() = prefs.getLong("custom_code_updated_at", 0L)
+        set(v) = prefs.edit().putLong("custom_code_updated_at", v).apply()
+
     var logUploadInterval: Int
         get() = prefs.getInt("log_upload_interval", 60)
         set(v) = prefs.edit().putInt("log_upload_interval", v).apply()
