@@ -13,7 +13,11 @@
         <TextView android:text="视频码率（kbps）" android:textColor="#AAAAAA" android:layout_width="wrap_content" android:layout_height="wrap_content" />
         <EditText android:id="@+id/etBitrate" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:hint="2048" android:inputType="number" android:textColor="#FFFFFF" android:textColorHint="#666666"
-            android:background="#2A2A3E" android:padding="8dp" android:layout_marginBottom="24dp" />
+            android:background="#2A2A3E" android:padding="8dp" android:layout_marginBottom="12dp" />
+
+        <TextView android:text="录像片段时长" android:textColor="#AAAAAA" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Spinner android:id="@+id/spinnerSegment" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:background="#2A2A3E" android:layout_marginBottom="24dp" />
 
         <Button android:id="@+id/btnSaveGeneral" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:text="保存" android:backgroundTint="#1A237E" android:textColor="#FFFFFF" />

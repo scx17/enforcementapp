@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.hardware.camera2.CameraManager
+import android.os.BatteryManager
 import android.media.MediaActionSound
 import android.media.MediaPlayer
 import android.os.Bundle
@@ -307,6 +308,12 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         tvGps?.textSize = fontSp * 0.75f
         tvDeviceIdOsd?.textSize = fontSp * 0.75f
 
+        // 每 10 秒刷新一次电量和存储（避免每秒读取开销）
+        val sec = now.time / 1000
+        if (sec % 10 == 0L) {
+            updateStorageInfo()
+        }
+
         // 更新摄像头画面水印（硬件 OSD，直接烧录到视频帧中）
         updateCameraWatermark(now, cfg)
     }
@@ -360,6 +367,19 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             findViewById<TextView>(R.id.tvStorage).text =
                 String.format("%.1fG/%.1fG", used, total)
         }
+        updateBatteryInfo()
+    }
+
+    private fun updateBatteryInfo() {
+        val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        val level = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        val isCharging = bm.isCharging
+        val tvBattery = findViewById<TextView>(R.id.tvBattery)
+        val icon = if (isCharging) "⚡" else if (level <= 20) "🪫" else "🔋"
+        tvBattery.text = "$icon ${level}%"
+        tvBattery.setTextColor(
+            if (level <= 20 && !isCharging) Color.parseColor("#FF5252") else Color.WHITE
+        )
     }
 
     private fun updateStreamStatus(text: String, colorHex: String) {
@@ -597,6 +617,51 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         // 闪烁红点效果
         val alpha = if ((elapsed % 2) == 0L) 1.0f else 0.6f
         indicator.alpha = alpha
+
+        // 自动分片：到达设定时长后自动切文件
+        val segmentMin = getEffectiveSegmentMinutes()
+        if (segmentMin > 0 && min >= segmentMin) {
+            Timber.i("录像分片: 已达 ${segmentMin} 分钟，自动切文件")
+            rotateRecordingSegment()
+        }
+    }
+
+    /** 获取生效的分片时长（远程优先，否则本地设置） */
+    private fun getEffectiveSegmentMinutes(): Int {
+        val remoteCfg = (application as EnforcementApp).remoteConfigManager.config.value
+        val remote = remoteCfg.recordingSegmentMinutes
+        return if (remote > 0) remote else settings.recordingSegmentMinutes
+    }
+
+    /** 无缝切换录制文件：停止当前 → 立即开始新文件 */
+    private fun rotateRecordingSegment() {
+        if (!isRecording) return
+        val oldFile = currentRecordFile
+
+        // 停止当前录制
+        mediaService?.stopLocalRecording()
+        Timber.i("分片录像停止: ${oldFile?.name}")
+
+        // 立即开始新文件
+        val dir = File(filesDir, "recordings").apply { mkdirs() }
+        val newFile = File(dir, "rec_${System.currentTimeMillis()}.mp4")
+        currentRecordFile = newFile
+        mediaService?.startLocalRecording(newFile)
+        recordingStartTime = System.currentTimeMillis()
+        Timber.i("分片录像开始: ${newFile.name}")
+
+        // 后台同步旧文件
+        if (oldFile != null && oldFile.exists()) {
+            val app = application as EnforcementApp
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    app.fileSyncService.syncFileList()
+                    Timber.i("分片录像同步清单: ${oldFile.name}, ${oldFile.length() / 1024}KB")
+                } catch (e: Exception) {
+                    Timber.e(e, "分片录像同步清单失败")
+                }
+            }
+        }
     }
 
     private fun capturePhoto() {
