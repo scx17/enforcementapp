@@ -33,6 +33,7 @@ import com.hdcollection.enforcement.hardware.LightState
 import com.hdcollection.enforcement.ui.LightPanelFragment
 import com.hdcollection.enforcement.ui.function.FunctionActivity
 import com.hdcollection.enforcement.ui.playback.PlaybackActivity
+import com.hdcollection.enforcement.logging.UserOpLogger
 import com.hdcollection.enforcement.service.AlarmReporter
 import com.hdcollection.enforcement.service.MediaCaptureService
 import com.hdcollection.enforcement.receiver.UsbStateReceiver
@@ -292,7 +293,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             tvGps?.visibility = android.view.View.VISIBLE
             val locService = (application as EnforcementApp).locationService
             val gpsText = if (locService.getLatitude() != 0.0) {
-                String.format("%.6f, %.6f %s", locService.getLatitude(), locService.getLongitude(), locService.getProviderDesc())
+                String.format("%.2f, %.2f %s", locService.getLatitude(), locService.getLongitude(), locService.getProviderDesc())
             } else {
                 "定位中..."
             }
@@ -346,7 +347,9 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
     }
 
     private fun updateDeviceInfo() {
-        val displayCode = settings.customCode.ifEmpty { settings.deviceId.ifEmpty { "未配置" } }
+        val displayCode = settings.customCode.ifEmpty {
+            settings.deviceId.takeLast(7).ifEmpty { "未配置" }
+        }
         findViewById<TextView>(R.id.tvDeviceId).text = displayCode
 
         val resolution = settings.videoResolution
@@ -375,8 +378,15 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         val level = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
         val isCharging = bm.isCharging
         val tvBattery = findViewById<TextView>(R.id.tvBattery)
-        val icon = if (isCharging) "⚡" else if (level <= 20) "🪫" else "🔋"
-        tvBattery.text = "$icon ${level}%"
+        val iconRes = when {
+            isCharging -> R.drawable.ic_battery_charging
+            level <= 20 -> R.drawable.ic_battery_critical
+            level <= 50 -> R.drawable.ic_battery_low
+            level <= 80 -> R.drawable.ic_battery_medium
+            else -> R.drawable.ic_battery_full
+        }
+        tvBattery.text = " ${level}%"
+        tvBattery.setCompoundDrawablesWithIntrinsicBounds(iconRes, 0, 0, 0)
         tvBattery.setTextColor(
             if (level <= 20 && !isCharging) Color.parseColor("#FF5252") else Color.WHITE
         )
@@ -475,6 +485,11 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
                     return
                 }
                 toggleFlashLight()
+                UserOpLogger.record(
+                    operationType = "SOS",
+                    description = "触发紧急按钮",
+                    critical = true
+                )
                 CoroutineScope(Dispatchers.IO).launch {
                     alarmReporter.report(
                         "sos", 3, "紧急按钮报警",
@@ -493,6 +508,12 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
                 LightState.strobeRedBlueOn = true
                 DeviceHardwareManager.setStrobeRedBlueBlink()
                 Timber.i("SOS: strobe red-blue blink activated")
+                UserOpLogger.record(
+                    operationType = "SOS",
+                    description = "长按触发紧急按钮",
+                    extraData = """{"strobe":"red_blue"}""",
+                    critical = true
+                )
                 CoroutineScope(Dispatchers.IO).launch {
                     alarmReporter.report(
                         "sos", 3, "紧急按钮报警(长按)",
@@ -508,6 +529,12 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
                     val targetUri = "sip:commander@${settings.sipServer}"
                     sipManager.makeCall(targetUri)
                     Timber.i("PTT: calling $targetUri")
+                    UserOpLogger.record(
+                        operationType = "PTTStart",
+                        description = "PTT 发起对讲",
+                        targetType = "sip",
+                        targetId = targetUri
+                    )
                 }
             }
             HardwareKeyReceiver.KeyAction.PTT_UP -> {
@@ -515,6 +542,10 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
                 if (sipManager.isInCall()) {
                     sipManager.hangup()
                     Timber.i("PTT: call ended")
+                    UserOpLogger.record(
+                        operationType = "PTTEnd",
+                        description = "PTT 结束对讲"
+                    )
                 }
             }
             HardwareKeyReceiver.KeyAction.MARK_PRESS -> {
@@ -571,6 +602,13 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             playVoice(R.raw.voice_stop_recording)
             showRecordingIndicator(false)
             Timber.i("Local recording stopped: ${recordFile?.name}")
+            UserOpLogger.record(
+                operationType = "StopRecording",
+                description = "手动停止录像 ${recordFile?.name ?: "(unknown)"}",
+                targetType = "recording",
+                targetId = recordFile?.name,
+                critical = true
+            )
 
             // 不再自动上传：只通知平台文件清单（含缩略图），等待平台 Pull 任务或手动触发上传
             if (recordFile != null && recordFile.exists()) {
@@ -594,6 +632,13 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             playVoice(R.raw.voice_start_recording)
             showRecordingIndicator(true)
             Timber.i("Local recording started: ${file.name}")
+            UserOpLogger.record(
+                operationType = "StartRecording",
+                description = "手动开始录像 ${file.name}",
+                targetType = "recording",
+                targetId = file.name,
+                critical = true
+            )
         }
     }
 
@@ -674,6 +719,12 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         shutterSound.play(MediaActionSound.SHUTTER_CLICK)
         mediaService?.capturePhoto(file) { savedFile ->
             Timber.i("Photo captured: ${savedFile.name}")
+            UserOpLogger.record(
+                operationType = "TakePhoto",
+                description = "手动拍照 ${savedFile.name}",
+                targetType = "photo",
+                targetId = savedFile.name
+            )
             runOnUiThread { playVoice(R.raw.voice_photo_taken) }
             // 立即触发文件清单同步，让平台看到缩略图（不自动上传，等平台 Pull）
             val app = application as EnforcementApp

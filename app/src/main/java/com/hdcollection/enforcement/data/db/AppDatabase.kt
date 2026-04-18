@@ -5,9 +5,14 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [UploadQueueEntity::class], version = 1, exportSchema = false)
+@Database(
+    entities = [UploadQueueEntity::class, UserOpLogEntity::class],
+    version = 2,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun uploadQueueDao(): UploadQueueDao
+    abstract fun userOpLogDao(): UserOpLogDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -18,7 +23,11 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "enforcement.db"
-                ).build().also { INSTANCE = it }
+                )
+                    // 审计日志是本地队列，丢失不影响主业务，直接重建表
+                    .fallbackToDestructiveMigration()
+                    .build()
+                    .also { INSTANCE = it }
             }
     }
 }

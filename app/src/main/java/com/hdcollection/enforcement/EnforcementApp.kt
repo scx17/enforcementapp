@@ -13,10 +13,12 @@ import okhttp3.MediaType.Companion.toMediaType
 import com.hdcollection.enforcement.config.RemoteConfigManager
 import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.logging.FileLoggingTree
+import com.hdcollection.enforcement.logging.UserOpLogger
 import com.hdcollection.enforcement.notification.PlatformNotificationService
 import com.hdcollection.enforcement.service.AlarmReporter
 import com.hdcollection.enforcement.service.LogUploadWorker
 import com.hdcollection.enforcement.service.UploadWorker
+import com.hdcollection.enforcement.service.UserOpLogUploadWorker
 import com.hdcollection.enforcement.sip.SipManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +70,10 @@ class EnforcementApp : Application() {
 
         // 初始化 SIP 对讲
         val settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
+
+        // 初始化用户操作审计（需要在任何 record 调用之前完成）
+        UserOpLogger.init(this, settings)
+
         sipManager = SipManager(settings)
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -127,6 +133,13 @@ class EnforcementApp : Application() {
 
         // 监听服务器 PullFile 命令 → 上传指定文件（串行化避免并发竞争）
         notificationService.onPullFileRequested = { fileName ->
+            UserOpLogger.record(
+                operationType = "RespondPullFile",
+                description = "响应平台拉取文件指令 $fileName",
+                targetType = "file",
+                targetId = fileName,
+                critical = true
+            )
             CoroutineScope(Dispatchers.IO).launch {
                 pullMutex.withLock {
                     pullAndUploadFile(fileName, settings)
@@ -146,6 +159,19 @@ class EnforcementApp : Application() {
             "log_upload", ExistingPeriodicWorkPolicy.KEEP, logUploadRequest
         )
         Timber.i("WorkManager 日志上传任务已注册: log_upload (每6小时)")
+
+        // 注册用户操作审计补传任务（兜底非关键事件 / 断网期间积压，每 15 分钟检查）
+        val opLogUploadRequest = PeriodicWorkRequestBuilder<UserOpLogUploadWorker>(15, TimeUnit.MINUTES)
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+            )
+            .build()
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "user_oplog_upload", ExistingPeriodicWorkPolicy.KEEP, opLogUploadRequest
+        )
+        Timber.i("WorkManager 用户操作审计补传任务已注册: user_oplog_upload (每15分钟)")
 
         // 注册本地存储清理任务（每天一次，阈值由远程配置 storageAutoCleanDays 决定）
         val storageCleanRequest = PeriodicWorkRequestBuilder<com.hdcollection.enforcement.service.StorageCleanupWorker>(
