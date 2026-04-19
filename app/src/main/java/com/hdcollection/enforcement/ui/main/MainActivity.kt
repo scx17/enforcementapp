@@ -864,14 +864,19 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
                     val dm = android.app.devicemanager.DeviceManager.getInstance()
                     dm.imei?.takeIf { it.isNotBlank() } ?: ""
                 } catch (_: Throwable) { "" }
-                if (imei.isBlank()) return@Thread
+                val sipDeviceId = settings.deviceId
+                // IMEI 和 SIP DeviceId 都没有时跳过
+                if (imei.isBlank() && sipDeviceId.isBlank()) return@Thread
 
+                val urlBuilder = StringBuilder("$apiUrl/api/device/me?")
+                if (imei.isNotBlank()) urlBuilder.append("imei=$imei&")
+                if (sipDeviceId.isNotBlank()) urlBuilder.append("deviceId=$sipDeviceId")
                 val client = okhttp3.OkHttpClient.Builder()
                     .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
                     .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
                     .build()
                 val request = okhttp3.Request.Builder()
-                    .url("$apiUrl/api/device/me?imei=$imei")
+                    .url(urlBuilder.toString().trimEnd('&', '?'))
                     .get()
                     .build()
                 val response = client.newCall(request).execute()
