@@ -148,4 +148,61 @@ y=$ssrc
     fun extractRealm(message: String): String? {
         return Regex("""realm="([^"]+)"""").find(message)?.groupValues?.get(1)
     }
+
+    /** 构建 GB28181 Catalog 查询响应 MESSAGE（设备→平台，携带通道列表 XML） */
+    fun buildCatalogResponse(
+        deviceId: String,
+        sipServer: String,
+        sipPort: String,
+        localIp: String,
+        localPort: Int,
+        callId: String,
+        cseq: Int,
+        fromHeader: String,  // 原始 Catalog MESSAGE 的 From（即平台 SIP URI）
+        toHeader: String,    // 原始 Catalog MESSAGE 的 To（即本设备 SIP URI）
+        sn: String
+    ): String {
+        val body = """<?xml version="1.0" encoding="GB2312"?>
+<Response>
+<CmdType>Catalog</CmdType>
+<SN>$sn</SN>
+<DeviceID>$deviceId</DeviceID>
+<SumNum>1</SumNum>
+<DeviceList Num="1">
+<Item>
+<DeviceID>$deviceId</DeviceID>
+<Name>执法仪</Name>
+<Manufacturer>HdCollection</Manufacturer>
+<Model>EnforcementCamera</Model>
+<Owner></Owner>
+<CivilCode>4401</CivilCode>
+<Block></Block>
+<Address></Address>
+<Parental>0</Parental>
+<ParentID>$deviceId</ParentID>
+<SafetyWay>0</SafetyWay>
+<RegisterWay>1</RegisterWay>
+<Secrecy>0</Secrecy>
+<Status>ON</Status>
+<Longitude>0</Longitude>
+<Latitude>0</Latitude>
+</Item>
+</DeviceList>
+</Response>"""
+        val bodyBytes = body.toByteArray(Charsets.UTF_8)
+        // From/To 对调：平台发来的 From 变成我们回复的 To，原 To 变成我们的 From
+        val respFrom = toHeader.replace(";tag=[^;\\r\\n]*".toRegex(), "") // 去掉原 tag
+        val respTo = fromHeader
+        return """MESSAGE sip:$sipServer:$sipPort SIP/2.0
+Via: SIP/2.0/UDP $localIp:$localPort;rport;branch=z9hG4bK${callId.take(8)}cl
+From: $respFrom;tag=${callId.takeLast(8)}
+To: $respTo
+Call-ID: ${callId}c
+CSeq: $cseq MESSAGE
+Content-Type: Application/MANSCDP+xml
+Max-Forwards: 70
+Content-Length: ${bodyBytes.size}
+
+$body""".trimIndent().replace("\n", "\r\n")
+    }
 }

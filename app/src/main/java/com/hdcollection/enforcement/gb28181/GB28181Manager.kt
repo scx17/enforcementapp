@@ -1,5 +1,6 @@
 package com.hdcollection.enforcement.gb28181
 
+import android.net.Network
 import com.hdcollection.enforcement.data.AppSettings
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
@@ -15,6 +16,8 @@ class GB28181Manager(
     private val settings: AppSettings,
     private val callback: StreamCallback
 ) {
+    // 当前可用网络，由 MediaCaptureService 在 NetworkCallback 中更新
+    @Volatile var boundNetwork: Network? = null
     private var udpSocket: DatagramSocket? = null
     private var listenJob: Job? = null
     private var keepAliveJob: Job? = null
@@ -51,6 +54,10 @@ class GB28181Manager(
                     // 绑定到设备的 WiFi IPv4 地址
                     val bindAddr = java.net.Inet4Address.getByName(localIp)
                     udpSocket = DatagramSocket(localPort, bindAddr)
+                    boundNetwork?.let { net ->
+                        try { net.bindSocket(udpSocket!!); Timber.i("GB28181: socket 已绑定到网络 $net") }
+                        catch (e: Throwable) { Timber.w("GB28181: bindSocket 失败: ${e.message}") }
+                    }
                     Timber.i("GB28181: socket bound to $localIp:$localPort (${udpSocket!!.localAddress})")
                     Timber.i("GB28181: registering ${settings.deviceId} to ${settings.sipServer}:${settings.sipPort}")
 
@@ -201,6 +208,29 @@ class GB28181Manager(
         Timber.i("GB28181: MESSAGE received, CmdType=$cmdType")
 
         when (cmdType) {
+            "Catalog" -> {
+                val sn = Regex("<SN>(.*?)</SN>").find(message)?.groupValues?.get(1) ?: "0"
+                Timber.i("GB28181: 收到 Catalog 查询 SN=$sn，发送通道列表响应")
+                try {
+                    val catalogMsg = SipMessage.buildCatalogResponse(
+                        deviceId = settings.deviceId,
+                        sipServer = settings.sipServer,
+                        sipPort = settings.sipPort,
+                        localIp = localIp,
+                        localPort = localPort,
+                        callId = callId,
+                        cseq = cseq++,
+                        fromHeader = fromHeader,
+                        toHeader = toHeader,
+                        sn = sn
+                    )
+                    val data = catalogMsg.toByteArray()
+                    udpSocket?.send(DatagramPacket(data, data.size, replyAddr, replyPort))
+                    Timber.i("GB28181: Catalog 响应已发送 -> ${replyAddr.hostAddress}:$replyPort")
+                } catch (e: Exception) {
+                    Timber.e(e, "GB28181: Catalog 响应发送失败")
+                }
+            }
             "Broadcast" -> {
                 Timber.i("GB28181: 收到广播/对讲指令，已回复200 OK，等待 INVITE")
                 // WVP-PRO 收到 200 OK 后会发送 INVITE 建立音频通道
