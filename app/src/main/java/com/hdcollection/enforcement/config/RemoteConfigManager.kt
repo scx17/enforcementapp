@@ -25,9 +25,9 @@ import java.util.concurrent.TimeUnit
  */
 data class RemoteConfig(
     // video_quality
-    val videoResolution: String = "1920x1080",
+    val videoResolution: String = "1280x720",
     val videoFps: Int = 25,
-    val videoBitrateKbps: Int = 4000,
+    val videoBitrateKbps: Int = 1500,
     // audio
     val audioEnabled: Boolean = true,
     // gps

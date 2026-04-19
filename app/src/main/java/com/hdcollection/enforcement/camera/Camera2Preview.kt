@@ -277,7 +277,7 @@ class Camera2Preview(private val context: Context) {
             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, encW, encH).apply {
                 setInteger(MediaFormat.KEY_BIT_RATE, encBitrateBps)
                 setInteger(MediaFormat.KEY_FRAME_RATE, encFps)
-                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
                 setInteger(MediaFormat.KEY_COLOR_FORMAT,
                     MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                 // 低延迟优化
@@ -339,6 +339,7 @@ class Camera2Preview(private val context: Context) {
 
     private fun startEncoderOutputLoop() {
         var spsPps: ByteArray? = null  // 缓存 SPS/PPS，拼接到每个 IDR 帧前
+        var frameCount = 0
 
         Timber.i("编码输出线程启动")
         encoderThread = Thread {
@@ -346,7 +347,11 @@ class Camera2Preview(private val context: Context) {
             while (isEncoding) {
                 try {
                     val codec = mediaCodec ?: break
-                    val index = codec.dequeueOutputBuffer(bufferInfo, 1_000) // 1ms 超时，减少编码延迟
+                    val index = codec.dequeueOutputBuffer(bufferInfo, 10_000) // 10ms 超时
+                    if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        Timber.i("Encoder: OUTPUT_FORMAT_CHANGED: ${codec.outputFormat}")
+                        continue
+                    }
                     if (index >= 0) {
                         val buffer = codec.getOutputBuffer(index) ?: continue
                         val data = ByteArray(bufferInfo.size)
@@ -361,23 +366,29 @@ class Camera2Preview(private val context: Context) {
                         }
 
                         val isKeyFrame = bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
+                        frameCount++
 
                         // IDR 帧前拼接 SPS/PPS
                         val frameData = if (isKeyFrame && spsPps != null) {
-                            Timber.d("Encoder: prepending SPS/PPS (${spsPps!!.size}B) to IDR (${data.size}B)")
+                            Timber.i("Encoder: IDR #$frameCount (${data.size}B), SPS/PPS=${spsPps!!.size}B, pts=${bufferInfo.presentationTimeUs}")
                             spsPps!! + data
                         } else {
+                            if (frameCount <= 5 || frameCount % 50 == 0) {
+                                Timber.i("Encoder: P-frame #$frameCount (${data.size}B), pts=${bufferInfo.presentationTimeUs}")
+                            }
                             data
                         }
 
                         rtpSender?.sendVideoFrame(frameData, bufferInfo.presentationTimeUs / 1000, isKeyFrame)
                         rtpSender?.flushAudioQueue()  // 视频帧后刷出音频，避免锁竞争
-                        Timber.v("RTP frame sent: ${frameData.size} bytes, keyframe=$isKeyFrame")
+                    } else if (index == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                        // 正常超时，继续
                     }
                 } catch (e: Exception) {
-                    if (isEncoding) Timber.e(e, "Encoder output error")
+                    if (isEncoding) Timber.e(e, "Encoder output error (frameCount=$frameCount)")
                 }
             }
+            Timber.i("编码输出线程结束 (totalFrames=$frameCount)")
         }.also { it.start() }
     }
 

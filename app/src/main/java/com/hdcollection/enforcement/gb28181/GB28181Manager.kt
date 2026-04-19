@@ -268,15 +268,16 @@ class GB28181Manager(
 
         // 从 SDP y= 字段解析 SSRC
         val sdpSsrc = extractSdpSsrc(message)
-        Timber.i("GB28181: INVITE SDP -> IP=$rtpIp, Port=$rtpPort, SSRC=$sdpSsrc")
+        Timber.i("GB28181: INVITE SDP -> IP=$rtpIp, Port=$rtpPort, SSRC=$sdpSsrc, localIp=$localIp")
 
-        // SDP 中填写设备推流的源地址（用 0.0.0.0 表示由服务端自动识别）
+        val ssrcStr = sdpSsrc?.let { String.format("%010d", it.toLong()) } ?: "0000000000"
         val ok = SipMessage.buildInviteOk(
             callIdHeader, fromHeader, toHeader, cseqHeader, viaHeader,
-            "0.0.0.0", rtpPort, sdpSsrc?.let { String.format("%010d", it.toLong()) } ?: "0000000000"
+            localIp, rtpPort, ssrcStr
         )
-        Timber.i("GB28181: 发送 200 OK, Via=$viaHeader")
-        sendUdp(ok)
+        Timber.i("GB28181: 发送 200 OK -> ${settings.sipServer}:${settings.sipPort}")
+        val sent = sendUdp(ok)
+        Timber.i("GB28181: 200 OK 发送结果=$sent, CallID=$callIdHeader")
 
         currentCallId = callIdHeader
         Timber.i("GB28181: INVITE accepted, streaming to $rtpIp:$rtpPort ssrc=$sdpSsrc")
@@ -425,18 +426,18 @@ class GB28181Manager(
 
     private fun getLocalIp(): String {
         return try {
-            val socket = java.net.Socket()
+            // 用 UDP socket 探测出口 IP，不建立实际 TCP 连接（SIP 服务器只开 UDP）
+            val socket = java.net.DatagramSocket()
             socket.connect(
-                java.net.InetSocketAddress(
-                    settings.sipServer,
-                    settings.sipPort.toIntOrNull() ?: 5060
-                ),
-                1000
+                java.net.InetAddress.getByName(settings.sipServer),
+                settings.sipPort.toIntOrNull() ?: 5060
             )
             val ip = socket.localAddress.hostAddress ?: "0.0.0.0"
             socket.close()
             if (ip == "0.0.0.0") {
                 Timber.w("GB28181: getLocalIp() 返回 0.0.0.0, 可能无网络连接")
+            } else {
+                Timber.i("GB28181: getLocalIp() = $ip")
             }
             ip
         } catch (e: Exception) {
