@@ -26,7 +26,7 @@ class GB28181Manager(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private var localIp: String = "0.0.0.0"
-    private val localPort = 5060
+    private val localPort get() = settings.sipLocalPort
 
     // keepAlive 连续失败次数 — 用于判断是否需要触发 onRegistrationFailed 并重建 socket
     private var keepaliveFailCount = 0
@@ -425,25 +425,44 @@ class GB28181Manager(
     }
 
     private fun getLocalIp(): String {
-        return try {
-            // 用 UDP socket 探测出口 IP，不建立实际 TCP 连接（SIP 服务器只开 UDP）
+        // 方法1：UDP socket 路由探测，只接受 IPv4 结果
+        try {
             val socket = java.net.DatagramSocket()
             socket.connect(
                 java.net.InetAddress.getByName(settings.sipServer),
                 settings.sipPort.toIntOrNull() ?: 5060
             )
-            val ip = socket.localAddress.hostAddress ?: "0.0.0.0"
+            val addr = socket.localAddress
             socket.close()
-            if (ip == "0.0.0.0") {
-                Timber.w("GB28181: getLocalIp() 返回 0.0.0.0, 可能无网络连接")
-            } else {
-                Timber.i("GB28181: getLocalIp() = $ip")
+            val ipv4 = (addr as? java.net.Inet4Address)?.hostAddress
+            if (ipv4 != null && ipv4 != "0.0.0.0") {
+                Timber.i("GB28181: getLocalIp() = $ipv4 (UDP socket)")
+                return ipv4
             }
-            ip
         } catch (e: Exception) {
-            Timber.w(e, "GB28181: getLocalIp() 异常, 回退到 0.0.0.0")
-            "0.0.0.0"
+            Timber.w(e, "GB28181: getLocalIp() UDP socket 失败, 尝试扫网卡")
         }
+        // 方法2：枚举网卡，取第一个非回环 IPv4 地址
+        try {
+            val ifaces = java.net.NetworkInterface.getNetworkInterfaces()
+            while (ifaces.hasMoreElements()) {
+                val iface = ifaces.nextElement()
+                if (!iface.isUp || iface.isLoopback) continue
+                val addrs = iface.inetAddresses
+                while (addrs.hasMoreElements()) {
+                    val addr = addrs.nextElement()
+                    if (addr is java.net.Inet4Address && !addr.isLoopbackAddress) {
+                        val ip = addr.hostAddress ?: continue
+                        Timber.i("GB28181: getLocalIp() = $ip (iface ${iface.name})")
+                        return ip
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "GB28181: getLocalIp() 扫网卡失败")
+        }
+        Timber.w("GB28181: getLocalIp() 所有方法失败, 回退到 0.0.0.0")
+        return "0.0.0.0"
     }
 
     private fun extractSdpConnection(message: String): String? {

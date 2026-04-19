@@ -1,5 +1,7 @@
 package com.hdcollection.enforcement.ui.settings
 
+import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import android.os.Handler
@@ -22,6 +24,10 @@ class ServerSettingsFragment : Fragment() {
     private val handler = Handler(Looper.getMainLooper())
     private var codeCheckRunnable: Runnable? = null
     private var codeAvailable = false
+
+    companion object {
+        private const val REQUEST_QR_SCAN = 2001
+    }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         _binding = FragmentSettingsServerBinding.inflate(inflater, container, false)
@@ -145,6 +151,12 @@ class ServerSettingsFragment : Fragment() {
             }.start()
         }
 
+        // 扫码按钮
+        binding.btnScanQr.setOnClickListener {
+            val intent = Intent(requireContext(), QrScanActivity::class.java)
+            startActivityForResult(intent, REQUEST_QR_SCAN)
+        }
+
         // 保存按钮
         binding.btnSave.setOnClickListener {
             val customCode = binding.etCustomCode.text.toString().trim()
@@ -162,6 +174,42 @@ class ServerSettingsFragment : Fragment() {
             val username = binding.etSipUsername.text.toString().trim()
             if (username.isNotEmpty()) settings.deviceId = username
             Toast.makeText(context, "配置已保存", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_QR_SCAN && resultCode == Activity.RESULT_OK) {
+            val raw = data?.getStringExtra(QrScanActivity.EXTRA_QR_DATA)
+            if (raw == null) {
+                Toast.makeText(context, "未获取到扫码数据", Toast.LENGTH_SHORT).show()
+                return
+            }
+            try {
+                val root = com.google.gson.JsonParser.parseString(raw).asJsonObject
+                if (root.get("type")?.asString != "hdc_server") {
+                    Toast.makeText(context, "不是有效的服务器配置二维码", Toast.LENGTH_SHORT).show()
+                    return
+                }
+
+                val apiUrl = root.get("apiUrl")?.asString ?: ""
+                val sipServer = root.get("sipServer")?.asString ?: ""
+                val sipPort = root.get("sipPort")?.asString ?: "5060"
+                val sipPassword = root.get("sipPassword")?.asString ?: ""
+
+                Timber.i("扫码配置成功: ApiUrl=$apiUrl, SipServer=$sipServer, SipPort=$sipPort")
+
+                // 填充表单
+                binding.etApiUrl.setText(apiUrl)
+                binding.etSipServer.setText(sipServer)
+                binding.etSipPort.setText(sipPort)
+                binding.etSipPassword.setText(sipPassword)
+
+                Toast.makeText(context, "已填充服务器配置，请输入设备编号后保存", Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                Timber.e(e, "解析扫码数据失败")
+                Toast.makeText(context, "二维码格式错误", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -217,14 +265,48 @@ class ServerSettingsFragment : Fragment() {
         }.start()
     }
 
+    /**
+     * 生成稳定的设备唯一标识（服务端作为 gb_device 主键使用，不强制真实 IMEI）。
+     *
+     * 优先顺序：
+     *  1. 厂商 DeviceManager.imei（仅部分 MTK 定制机有，系统签名 API）
+     *  2. Settings.Secure.ANDROID_ID（每台设备稳定唯一，工厂重置才变）
+     *  3. 随机 UUID 持久化到 prefs（兜底）
+     *
+     * 之前版本 catch 块固定返回 "0000000000000000"，导致所有非定制机设备
+     * 在服务端共享同一个 gb_device 记录 → 分配到同一个 sipDeviceId，平台只能点播到其中一台。
+     */
+    @android.annotation.SuppressLint("HardwareIds")
     private fun getImei(): String {
-        return try {
+        // 1. 厂商私有 API
+        try {
             val dm = android.app.devicemanager.DeviceManager.getInstance()
-            dm.imei?.takeIf { it.isNotBlank() } ?: "0000000000000000"
-        } catch (e: Exception) {
-            Timber.w(e, "DeviceManager.getImei() 不可用")
-            "0000000000000000"
+            val vendorImei = dm.imei?.takeIf { it.isNotBlank() }
+            if (vendorImei != null) return vendorImei
+        } catch (e: Throwable) {
+            Timber.w("DeviceManager.getImei() 不可用: ${e.message}, 回退 ANDROID_ID")
         }
+        // 2. ANDROID_ID（无权限要求，16 位十六进制，稳定唯一）
+        val ctx = context ?: return fallbackUuid()
+        val androidId = android.provider.Settings.Secure
+            .getString(ctx.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+        if (!androidId.isNullOrBlank() && androidId != "9774d56d682e549c") {
+            // 9774d56d682e549c 是早期 Android 模拟器/某些设备固定值
+            return "ANDROID_$androidId"
+        }
+        // 3. 随机 UUID 持久化
+        return fallbackUuid()
+    }
+
+    private fun fallbackUuid(): String {
+        val prefs = requireContext().getSharedPreferences("app_settings", 0)
+        var uuid = prefs.getString("fallback_device_uuid", null)
+        if (uuid.isNullOrBlank()) {
+            uuid = "UUID_" + java.util.UUID.randomUUID().toString().replace("-", "")
+            prefs.edit().putString("fallback_device_uuid", uuid).apply()
+            Timber.i("生成 fallback 设备 UUID: $uuid")
+        }
+        return uuid
     }
 
     override fun onDestroyView() {

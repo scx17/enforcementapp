@@ -56,4 +56,10 @@ class AppSettings(private val prefs: SharedPreferences) {
     var recordingSegmentMinutes: Int
         get() = prefs.getInt("recording_segment_minutes", 5)
         set(v) = prefs.edit().putInt("recording_segment_minutes", v).apply()
+
+    /** 本地 SIP 监听端口（默认 5060）。当两台设备共用同一 NAT/SIP ALG 路由器时，
+     *  可将其中一台改为其他端口（如 15060）以避免 SIP ALG 冲突。 */
+    var sipLocalPort: Int
+        get() = prefs.getInt("sip_local_port", 5060)
+        set(v) = prefs.edit().putInt("sip_local_port", v).apply()
 }

@@ -265,8 +265,11 @@ class Camera2Preview(private val context: Context) {
         currentRtpIp = rtpIp
         currentRtpPort = rtpPort
         currentSsrc = ssrc
+        // camera 被系统回收（例如 MTK 平台息屏后 HAL 触发 onDisconnected）时自动重开
         val camera = cameraDevice ?: run {
-            Timber.w("Camera not open, cannot start encoding")
+            Timber.w("Camera not open, 触发重开后延迟推流: $rtpIp:$rtpPort ssrc=$ssrc")
+            pendingResumeEncoding = true
+            openCamera()
             return
         }
 
