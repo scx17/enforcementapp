@@ -46,6 +46,7 @@ class PlatformNotificationService(
     var onPullFileRequested: ((String) -> Unit)? = null
     var onWorkTaskReceived: ((String, String) -> Unit)? = null  // (title, priority)
     var onConfigPushReceived: ((org.json.JSONObject) -> Unit)? = null
+    var onCustomCodeChanged: ((String) -> Unit)? = null
 
     // 无限重连状态机
     private val reconnecting = AtomicBoolean(false)
@@ -182,6 +183,7 @@ class PlatformNotificationService(
                         val notification = PlatformNotification("设备编号已更新为: $newCode")
                         notifications.add(0, notification)
                         onNotificationReceived?.invoke(notification)
+                        onCustomCodeChanged?.invoke(newCode)
                     }
                 } catch (e: Exception) {
                     Timber.e(e, "CustomCodeChanged 处理失败")

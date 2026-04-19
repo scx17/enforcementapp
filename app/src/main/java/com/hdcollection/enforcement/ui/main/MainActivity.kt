@@ -56,6 +56,8 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
     private lateinit var alarmReporter: AlarmReporter
 
     private var isNavigatingInternally = false
+    private var isRequestingPermissions = false
+    private var isFullyInitialized = false  // onCreate 完整跑完才为 true；未设置时禁止 onPause 触发重启循环
     private var isRecording = false
     private var isFlashOn = false
     private var currentRecordFile: File? = null
@@ -128,26 +130,29 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
             or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         )
-        // WakeLock 已由 MediaCaptureService 持有
 
-        // 启动 MediaCaptureService（前台服务）
+        settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
+        alarmReporter = AlarmReporter(settings)
+
+        // 全新设备未配置 → 仅跳设置页，不启动服务，不请求权限，避免两个 Activity 同时争焦点触发 ANR
+        if (settings.customCode.isBlank() && settings.deviceId.isBlank()) {
+            Timber.w("设备未配置，跳转设置页")
+            isNavigatingInternally = true
+            startActivity(Intent(this, SettingsActivity::class.java))
+            return
+        }
+
+        // 启动 MediaCaptureService（前台服务）— 仅在设备已配置时启动
         val mediaIntent = Intent(this, MediaCaptureService::class.java)
         ContextCompat.startForegroundService(this, mediaIntent)
         bindService(mediaIntent, mediaServiceConnection, Context.BIND_AUTO_CREATE)
 
-        settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
-        alarmReporter = AlarmReporter(settings)
         // GB28181Manager + Camera 已由 MediaCaptureService 持有
 
         // 检查自定义设备编号是否已配置
-        if (settings.customCode.isBlank() && settings.deviceId.isNotBlank()) {
+        if (settings.customCode.isBlank()) {
             // 已有 SIP 编号但无自定义编号 → 从平台拉取（迁移回填的默认值）
             syncCustomCodeFromPlatform()
-        } else if (settings.customCode.isBlank() && settings.deviceId.isBlank()) {
-            // 全新设备未配置 → 跳设置页
-            Timber.w("设备未配置，跳转设置页")
-            Toast.makeText(this, "请先配置平台地址和设备编号", Toast.LENGTH_LONG).show()
-            startActivity(Intent(this, SettingsActivity::class.java))
         } else {
             // 已有编号 → 静默同步（处理管理员改名）
             syncCustomCodeFromPlatform()
@@ -164,6 +169,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         findViewById<TextView>(R.id.tvRecordingIndicator).visibility = View.GONE
 
         if (!hasRequiredPermissions()) {
+            isRequestingPermissions = true
             ActivityCompat.requestPermissions(this, requiredPermissions, REQUEST_PERMISSIONS)
         }
 
@@ -177,19 +183,27 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             runOnUiThread { showWorkTaskAlert(title, priority) }
         }
 
+        // 平台修改设备编号后实时刷新 UI
+        (application as EnforcementApp).notificationService.onCustomCodeChanged = { _ ->
+            runOnUiThread { updateDeviceInfo() }
+        }
+
         // 注册硬件按键广播接收器
         registerHardwareKeyReceiver()
 
         // 注册 USB 插拔广播接收器
         registerReceiver(usbStateReceiver, UsbStateReceiver.createIntentFilter())
         Timber.i("USB state receiver registered")
+
+        isFullyInitialized = true
     }
 
     override fun onPause() {
         super.onPause()
         clockHandler.removeCallbacks(clockRunnable)
-        // 仅在屏幕亮着且被系统切走时拉回前台（息屏不拉回，让 Activity 正常进 onStop）
-        if (!isNavigatingInternally) {
+        // 仅在完整初始化后、屏幕亮着且被系统切走时拉回前台
+        if (!isFullyInitialized) return
+        if (!isNavigatingInternally && !isRequestingPermissions) {
             val pm = getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
             if (pm.isInteractive) {
                 Handler(Looper.getMainLooper()).postDelayed({
@@ -206,7 +220,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
 
     override fun onResume() {
         super.onResume()
-        isNavigatingInternally = false
+        if (isFullyInitialized) isNavigatingInternally = false
         clockHandler.post(clockRunnable)
         updateDeviceInfo()
     }
@@ -338,9 +352,9 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             val timeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
             dm.setCameraWaterMarkText(0, if (cfg.osdShowTime) timeFmt.format(now) else "")
             dm.setCameraWaterMarkText(1, if (cfg.osdShowDeviceId) settings.deviceId else "")
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             if (!watermarkEnabled) {
-                Timber.w(e, "硬件水印不可用: ${e.message}")
+                Timber.w("硬件水印不可用: ${e.message}")
                 watermarkEnabled = true // 只报一次
             }
         }
@@ -408,6 +422,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        isRequestingPermissions = false
         if (requestCode == REQUEST_PERMISSIONS) {
             val denied = permissions.zip(grantResults.toList())
                 .filter { it.second != PackageManager.PERMISSION_GRANTED }
@@ -848,7 +863,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
                 val imei = try {
                     val dm = android.app.devicemanager.DeviceManager.getInstance()
                     dm.imei?.takeIf { it.isNotBlank() } ?: ""
-                } catch (_: Exception) { "" }
+                } catch (_: Throwable) { "" }
                 if (imei.isBlank()) return@Thread
 
                 val client = okhttp3.OkHttpClient.Builder()
