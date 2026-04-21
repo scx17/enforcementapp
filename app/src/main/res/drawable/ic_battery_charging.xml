@@ -1,0 +1,18 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp"
+    android:height="12dp"
+    android:viewportWidth="20"
+    android:viewportHeight="12">
+    <!-- 电池外壳 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M2,1h13c0.6,0 1,0.4 1,1v8c0,0.6 -0.4,1 -1,1h-13c-0.6,0 -1,-0.4 -1,-1v-8c0,-0.6 0.4,-1 1,-1z" />
+    <!-- 电池正极凸起 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M17,4h1.5c0.3,0 0.5,0.2 0.5,0.5v3c0,0.3 -0.2,0.5 -0.5,0.5h-1.5z" />
+    <!-- 闪电符号（充电中） -->
+    <path
+        android:fillColor="#4CAF50"
+        android:pathData="M10.5,1.5l-3,4.5h2.5l-1.5,4.5l3.5,-5h-2.5z" />
+</vector>
