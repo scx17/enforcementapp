@@ -74,8 +74,9 @@ Content-Length: 0
         rtpPort: Int,
         ssrc: String
     ): String {
+        // buildSdp 已返回 CRLF 结尾的字符串，单独拼接避免外层 replace 把 \r\n → \r\r\n
         val sdp = buildSdp(localIp, rtpPort, ssrc)
-        return """SIP/2.0 200 OK
+        val headers = """SIP/2.0 200 OK
 Via: $viaHeader
 From: $fromHeader
 To: $toHeader;tag=enforceapp
@@ -83,9 +84,10 @@ Call-ID: $callId
 CSeq: $cseq
 Contact: <sip:$localIp:5060>
 Content-Type: application/sdp
-Content-Length: ${sdp.length}
+Content-Length: ${sdp.toByteArray(Charsets.UTF_8).size}
 
-$sdp""".replace("\n", "\r\n")
+""".replace("\n", "\r\n")
+        return headers + sdp
     }
 
     fun buildMessageOk(
@@ -189,11 +191,13 @@ y=$ssrc
 </Item>
 </DeviceList>
 </Response>"""
-        val bodyBytes = body.toByteArray(Charsets.UTF_8)
+        // body 中 \n 会被 replace 转成 \r\n，需用替换后的字节数作 Content-Length
+        val bodyCrlf = body.replace("\n", "\r\n")
+        val bodyBytes = bodyCrlf.toByteArray(Charsets.UTF_8)
         // From/To 对调：平台发来的 From 变成我们回复的 To，原 To 变成我们的 From
         val respFrom = toHeader.replace(";tag=[^;\\r\\n]*".toRegex(), "") // 去掉原 tag
         val respTo = fromHeader
-        return """MESSAGE sip:$sipServer:$sipPort SIP/2.0
+        val headers = """MESSAGE sip:$sipServer:$sipPort SIP/2.0
 Via: SIP/2.0/UDP $localIp:$localPort;rport;branch=z9hG4bK${callId.take(8)}cl
 From: $respFrom;tag=${callId.takeLast(8)}
 To: $respTo
@@ -203,6 +207,7 @@ Content-Type: Application/MANSCDP+xml
 Max-Forwards: 70
 Content-Length: ${bodyBytes.size}
 
-$body""".trimIndent().replace("\n", "\r\n")
+""".trimIndent().replace("\n", "\r\n") + "\r\n"
+        return headers + bodyCrlf
     }
 }
