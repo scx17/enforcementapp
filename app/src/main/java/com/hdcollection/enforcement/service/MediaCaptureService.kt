@@ -166,6 +166,9 @@ class MediaCaptureService : Service(), StreamCallback {
     fun capturePhoto(out: File, cb: (File) -> Unit) { camera?.capturePhoto(out, cb) }
     fun startLocalRecording(out: File) { camera?.startLocalRecording(out) }
     fun stopLocalRecording() { camera?.stopLocalRecording() }
+    fun startAudioRecording(file: File) { camera?.startAudioRecording(file) }
+    fun stopAudioRecording(): Long = camera?.stopAudioRecording() ?: 0L
+    fun isAudioRecording(): Boolean = camera?.isAudioRecording == true
     fun switchCamera() { camera?.switchCamera() }
     fun isFrontCamera(): Boolean = camera?.isFrontCamera() ?: false
     fun startEncoding(rtpIp: String, rtpPort: Int, ssrc: Int) { camera?.startEncoding(rtpIp, rtpPort, ssrc) }
