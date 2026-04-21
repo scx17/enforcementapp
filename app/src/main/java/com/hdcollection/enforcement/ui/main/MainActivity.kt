@@ -709,7 +709,8 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
                 critical = true
             )
             if (file != null && file.exists()) {
-                // TODO Task 8: enqueueAudioUpload(file, duration)
+                // 音频上传走"服务端拉取"链路：FileListSyncService 已预置 audios/ 目录扫描
+                // （fileType="audio"+duration），此处仅触发一次清单同步即可
                 val app = application as EnforcementApp
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
