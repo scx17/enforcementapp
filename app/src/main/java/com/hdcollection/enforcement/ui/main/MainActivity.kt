@@ -262,6 +262,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         try { unregisterReceiver(hardwareKeyReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(usbStateReceiver) } catch (_: Exception) {}
         recordingTimerHandler.removeCallbacks(recordingTimerRunnable)
+        audioTimerHandler.removeCallbacks(audioTimerRunnable)
         voicePlayer?.release()
         shutterSound.release()
         mediaService?.removeListener(this)
