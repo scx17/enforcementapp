@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import com.hdcollection.enforcement.BuildConfig
 import com.hdcollection.enforcement.hardware.DeviceHardwareManager
 import timber.log.Timber
 
@@ -28,6 +29,10 @@ class UsbStateReceiver : BroadcastReceiver() {
         }
 
         if (connected && !hostConnected) {
+            if (BuildConfig.DEBUG) {
+                Timber.d("USB: debug 包跳过 U 盘模式，保留 ADB 连接")
+                return
+            }
             // USB 连接到电脑（非 OTG 主机模式）
             val result = DeviceHardwareManager.setUsbDisk(true)
             Timber.i("USB 已连接，开启 U 盘模式: result=$result, isOpen=${DeviceHardwareManager.isUsbDiskOpen()}")

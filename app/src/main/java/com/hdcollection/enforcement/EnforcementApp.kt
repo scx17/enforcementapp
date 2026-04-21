@@ -11,6 +11,7 @@ import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 import okhttp3.MediaType.Companion.toMediaType
 import com.hdcollection.enforcement.config.RemoteConfigManager
+import com.hdcollection.enforcement.hardware.DeviceHardwareManager
 import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.logging.FileLoggingTree
 import com.hdcollection.enforcement.logging.UserOpLogger
@@ -63,6 +64,10 @@ class EnforcementApp : Application() {
         // 挂载 Timber：Debug 模式同时输出到 Logcat，始终输出到文件
         if (BuildConfig.DEBUG) {
             Timber.plant(Timber.DebugTree())
+            if (DeviceHardwareManager.isAvailable()) {
+                DeviceHardwareManager.setUsbDisk(false)
+                Timber.d("debug 包: 已重置 USB 为 ADB 模式")
+            }
         }
         Timber.plant(FileLoggingTree(logFile))
 
@@ -111,10 +116,6 @@ class EnforcementApp : Application() {
             }
         }
 
-        // 取消旧版自动上传任务（已改为服务器拉取模式）
-        WorkManager.getInstance(this).cancelUniqueWork("auto_upload")
-        Timber.i("已取消旧版自动上传任务")
-
         // 文件列表定期同步（每 5 分钟，上报本地文件清单到服务器）
         val syncClient = okhttp3.OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
@@ -147,40 +148,35 @@ class EnforcementApp : Application() {
             }
         }
 
-        // 注册日志定时上传（每 6 小时）
-        val logUploadRequest = PeriodicWorkRequestBuilder<LogUploadWorker>(6, TimeUnit.HOURS)
-            .setConstraints(
-                Constraints.Builder()
-                    .setRequiredNetworkType(NetworkType.CONNECTED)
-                    .build()
-            )
-            .build()
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "log_upload", ExistingPeriodicWorkPolicy.KEEP, logUploadRequest
-        )
-        Timber.i("WorkManager 日志上传任务已注册: log_upload (每6小时)")
+        // WorkManager 注册移到后台线程：首次安装时 Room DB 建表可能耗时 2-3 秒，阻塞主线程会触发 ANR
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val wm = WorkManager.getInstance(this@EnforcementApp)
+                // 取消旧版自动上传任务（已改为服务器拉取模式）
+                wm.cancelUniqueWork("auto_upload")
+                Timber.i("已取消旧版自动上传任务")
 
-        // 注册用户操作审计补传任务（兜底非关键事件 / 断网期间积压，每 15 分钟检查）
-        val opLogUploadRequest = PeriodicWorkRequestBuilder<UserOpLogUploadWorker>(15, TimeUnit.MINUTES)
-            .setConstraints(
-                Constraints.Builder()
-                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                val logUploadRequest = PeriodicWorkRequestBuilder<LogUploadWorker>(6, TimeUnit.HOURS)
+                    .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                     .build()
-            )
-            .build()
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "user_oplog_upload", ExistingPeriodicWorkPolicy.KEEP, opLogUploadRequest
-        )
-        Timber.i("WorkManager 用户操作审计补传任务已注册: user_oplog_upload (每15分钟)")
+                wm.enqueueUniquePeriodicWork("log_upload", ExistingPeriodicWorkPolicy.KEEP, logUploadRequest)
+                Timber.i("WorkManager 日志上传任务已注册: log_upload (每6小时)")
 
-        // 注册本地存储清理任务（每天一次，阈值由远程配置 storageAutoCleanDays 决定）
-        val storageCleanRequest = PeriodicWorkRequestBuilder<com.hdcollection.enforcement.service.StorageCleanupWorker>(
-            1, TimeUnit.DAYS
-        ).build()
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "storage_cleanup", ExistingPeriodicWorkPolicy.KEEP, storageCleanRequest
-        )
-        Timber.i("WorkManager 存储清理任务已注册: storage_cleanup (每日)")
+                val opLogUploadRequest = PeriodicWorkRequestBuilder<UserOpLogUploadWorker>(15, TimeUnit.MINUTES)
+                    .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                    .build()
+                wm.enqueueUniquePeriodicWork("user_oplog_upload", ExistingPeriodicWorkPolicy.KEEP, opLogUploadRequest)
+                Timber.i("WorkManager 用户操作审计补传任务已注册: user_oplog_upload (每15分钟)")
+
+                val storageCleanRequest = PeriodicWorkRequestBuilder<com.hdcollection.enforcement.service.StorageCleanupWorker>(
+                    1, TimeUnit.DAYS
+                ).build()
+                wm.enqueueUniquePeriodicWork("storage_cleanup", ExistingPeriodicWorkPolicy.KEEP, storageCleanRequest)
+                Timber.i("WorkManager 存储清理任务已注册: storage_cleanup (每日)")
+            } catch (e: Exception) {
+                Timber.e(e, "WorkManager 注册失败")
+            }
+        }
 
         // 订阅远程配置：GPS 热切换
         CoroutineScope(Dispatchers.IO).launch {
