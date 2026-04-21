@@ -10,7 +10,7 @@ android {
 
     defaultConfig {
         applicationId = "com.hdcollection.enforcement"
-        minSdk = 26
+        minSdk = 25
         targetSdk = 36
         versionCode = 1
         versionName = "1.0.0"
@@ -76,6 +76,13 @@ dependencies {
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
+
+    // CameraX + ML Kit 二维码扫描
+    implementation(libs.camera.core)
+    implementation(libs.camera.camera2)
+    implementation(libs.camera.lifecycle)
+    implementation(libs.camera.view)
+    implementation(libs.mlkit.barcode)
 
     // Test
     testImplementation(libs.junit)

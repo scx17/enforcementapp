@@ -67,6 +67,12 @@
             android:screenOrientation="portrait" />
 
         <activity
+            android:name=".ui.settings.QrScanActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.AppCompat.NoActionBar" />
+
+        <activity
             android:name=".ui.playback.PlaybackActivity"
             android:exported="false"
             android:screenOrientation="portrait" />

@@ -35,7 +35,11 @@
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:text="从平台自动获取以下配置" android:backgroundTint="#0D47A1" android:textColor="#FFFFFF"
             android:layout_marginBottom="4dp" />
-        <TextView android:text="输入平台地址后点击上方按钮可自动填充，也可手动修改以下参数连接其他平台"
+        <Button android:id="@+id/btnScanQr"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="扫描二维码获取配置" android:backgroundTint="#1B5E20" android:textColor="#FFFFFF"
+            android:layout_marginBottom="4dp" />
+        <TextView android:text="点击上方按钮自动填充，或扫描平台端二维码，也可手动修改以下参数"
             android:textColor="#888888" android:textSize="11sp"
             android:layout_width="wrap_content" android:layout_height="wrap_content"
             android:layout_marginBottom="16dp" />
