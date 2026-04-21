@@ -99,6 +99,18 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         }
     }
 
+    // 音频录制
+    private var currentAudioFile: File? = null
+    private var lastAudioToggleTime: Long = 0L
+    private var audioTimerStart: Long = 0L
+    private val audioTimerHandler = Handler(Looper.getMainLooper())
+    private val audioTimerRunnable = object : Runnable {
+        override fun run() {
+            updateAudioRecordingTimer()
+            audioTimerHandler.postDelayed(this, 1000)
+        }
+    }
+
     private val clockHandler = Handler(Looper.getMainLooper())
     private val clockRunnable = object : Runnable {
         override fun run() {
@@ -567,8 +579,8 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
                 Timber.i("Mark key pressed: timestamp=${System.currentTimeMillis()}")
             }
             HardwareKeyReceiver.KeyAction.MARK_LONG_PRESS -> showLightPanel()
-            HardwareKeyReceiver.KeyAction.RECORD_PRESS -> Timber.i("Record key pressed")
-            HardwareKeyReceiver.KeyAction.RECORD_LONG_PRESS -> Timber.i("Record key long pressed")
+            HardwareKeyReceiver.KeyAction.RECORD_PRESS -> toggleAudioRecording()
+            HardwareKeyReceiver.KeyAction.RECORD_LONG_PRESS -> Timber.d("Record key long press ignored")
             HardwareKeyReceiver.KeyAction.FN_PRESS -> startInternalActivity(Intent(this, FunctionActivity::class.java))
             HardwareKeyReceiver.KeyAction.FN_LONG_PRESS -> startInternalActivity(Intent(this, SettingsActivity::class.java))
         }
@@ -608,6 +620,11 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         val now = System.currentTimeMillis()
         if (now - lastRecordingToggleTime < DEBOUNCE_MS) return
         lastRecordingToggleTime = now
+        if (mediaService?.isAudioRecording() == true) {
+            Toast.makeText(this, "正在录音中，无法录像", Toast.LENGTH_SHORT).show()
+            Timber.w("toggleLocalRecording rejected: audio recording in progress")
+            return
+        }
         if (isRecording) {
             val recordFile = currentRecordFile
 
@@ -657,6 +674,79 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         }
     }
 
+    private fun toggleAudioRecording() {
+        val now = System.currentTimeMillis()
+        if (now - lastAudioToggleTime < DEBOUNCE_MS) return
+        lastAudioToggleTime = now
+
+        // 互斥门控：录像中禁止录音
+        if (isRecording) {
+            Toast.makeText(this, "正在录像中，无法录音", Toast.LENGTH_SHORT).show()
+            Timber.w("toggleAudioRecording rejected: video recording in progress")
+            return
+        }
+
+        val service = mediaService ?: run {
+            Timber.w("toggleAudioRecording: mediaService is null")
+            return
+        }
+
+        if (service.isAudioRecording()) {
+            // ── 停止 ──
+            val file = currentAudioFile
+            val duration = service.stopAudioRecording()
+            currentAudioFile = null
+            playVoice(R.raw.voice_stop_recording)
+            showAudioRecordingIndicator(false)
+            Toast.makeText(this, "音频已保存 ${duration / 1000}s", Toast.LENGTH_SHORT).show()
+            Timber.i("Audio recording stopped: file=${file?.name}, duration_ms=$duration")
+            UserOpLogger.record(
+                operationType = "StopAudioRecording",
+                description = "手动停止录音 ${file?.name ?: "(unknown)"}",
+                targetType = "audio",
+                targetId = file?.name,
+                critical = true
+            )
+            if (file != null && file.exists()) {
+                // TODO Task 8: enqueueAudioUpload(file, duration)
+                val app = application as EnforcementApp
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        app.fileSyncService.syncFileList()
+                        Timber.i("录音完成触发文件清单同步: ${file.name}, ${file.length() / 1024}KB")
+                    } catch (e: Exception) {
+                        Timber.e(e, "录音完成后同步清单失败")
+                    }
+                }
+            }
+        } else {
+            // ── 启动 ──
+            val dir = File(filesDir, "audios").apply { mkdirs() }
+            val file = File(dir, "audio_${System.currentTimeMillis()}.m4a")
+            currentAudioFile = file
+            try {
+                service.startAudioRecording(file)
+            } catch (e: Exception) {
+                Toast.makeText(this, "录音启动失败", Toast.LENGTH_SHORT).show()
+                Timber.e(e, "toggleAudioRecording: start failed")
+                currentAudioFile = null
+                return
+            }
+            audioTimerStart = System.currentTimeMillis()
+            playVoice(R.raw.voice_start_recording)
+            showAudioRecordingIndicator(true)
+            Toast.makeText(this, "音频开始录制", Toast.LENGTH_SHORT).show()
+            Timber.i("Audio recording started: file=${file.name}")
+            UserOpLogger.record(
+                operationType = "StartAudioRecording",
+                description = "手动开始录音 ${file.name}",
+                targetType = "audio",
+                targetId = file.name,
+                critical = true
+            )
+        }
+    }
+
     private fun showRecordingIndicator(show: Boolean) {
         val indicator = findViewById<TextView>(R.id.tvRecordingIndicator)
         if (show) {
@@ -684,6 +774,26 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             Timber.i("录像分片: 已达 ${segmentMin} 分钟，自动切文件")
             rotateRecordingSegment()
         }
+    }
+
+    private fun showAudioRecordingIndicator(show: Boolean) {
+        val v = findViewById<TextView>(R.id.tvAudioRecordingIndicator)
+        if (show) {
+            v.visibility = View.VISIBLE
+            audioTimerHandler.post(audioTimerRunnable)
+        } else {
+            v.visibility = View.GONE
+            audioTimerHandler.removeCallbacks(audioTimerRunnable)
+        }
+    }
+
+    private fun updateAudioRecordingTimer() {
+        val v = findViewById<TextView>(R.id.tvAudioRecordingIndicator)
+        val elapsed = (System.currentTimeMillis() - audioTimerStart) / 1000
+        val min = elapsed / 60
+        val sec = elapsed % 60
+        v.text = String.format("● MIC %02d:%02d", min, sec)
+        v.alpha = if ((elapsed % 2) == 0L) 1.0f else 0.6f
     }
 
     /** 获取生效的分片时长（远程优先，否则本地设置） */
