@@ -126,22 +126,21 @@ class MediaCaptureService : Service(), StreamCallback {
         try {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             val req = NetworkRequest.Builder()
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
                 .build()
             val cb = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
                     Timber.i("[Service] NetworkCallback: onAvailable network=$network")
+                    gb28181Manager?.boundNetwork = network
                     gb28181Manager?.triggerReconnect("network onAvailable")
                 }
                 override fun onLost(network: Network) {
                     Timber.i("[Service] NetworkCallback: onLost network=$network")
+                    gb28181Manager?.boundNetwork = null
                     gb28181Manager?.notifyNetworkLost("network onLost")
                 }
                 override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                    if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
-                        gb28181Manager?.triggerReconnect("network validated")
-                    }
+                    gb28181Manager?.boundNetwork = network
                 }
             }
             cm.registerNetworkCallback(req, cb)
