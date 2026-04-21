@@ -119,6 +119,22 @@
         app:layout_constraintTop_toBottomOf="@id/infoBar"
         app:layout_constraintEnd_toEndOf="parent" />
 
+    <!-- 音频录制指示器（叠加在录像指示器下方，Task 7 会切换显隐） -->
+    <TextView
+        android:id="@+id/tvAudioRecordingIndicator"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:padding="6dp"
+        android:textColor="#FF9500"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:background="#80000000"
+        android:text="● MIC 00:00"
+        android:visibility="gone"
+        android:layout_marginTop="8dp"
+        app:layout_constraintStart_toStartOf="@id/tvRecordingIndicator"
+        app:layout_constraintTop_toBottomOf="@id/tvRecordingIndicator" />
+
     <!-- GPS + 设备信息栏 -->
     <LinearLayout
         android:id="@+id/gpsBar"
