@@ -69,6 +69,11 @@ class Camera2Preview(private val context: Context) {
     private var currentRecordingFile: File? = null
     private var useFrontCamera = false
 
+    private var audioRecorder: MediaRecorder? = null
+    var isAudioRecording: Boolean = false
+        private set
+    private var audioStartTime: Long = 0L
+
     private var audioMediaCodec: MediaCodec? = null
     private var audioRecord: AudioRecord? = null
     private var audioInputThread: Thread? = null
@@ -604,6 +609,58 @@ class Camera2Preview(private val context: Context) {
         rebuildCaptureSession()
         Timber.i("Local recording stopped: ${currentRecordingFile?.name}, isEncoding=$isEncoding")
         currentRecordingFile = null
+    }
+
+    fun startAudioRecording(file: File) {
+        if (isAudioRecording) {
+            Timber.w("startAudioRecording ignored: already recording, file=${file.name}")
+            return
+        }
+        try {
+            val recorder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                MediaRecorder(context)
+            } else {
+                @Suppress("DEPRECATION")
+                MediaRecorder()
+            }
+            recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+            recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            recorder.setAudioSamplingRate(44100)
+            recorder.setAudioEncodingBitRate(96_000)
+            recorder.setAudioChannels(1)
+            recorder.setOutputFile(file.absolutePath)
+            recorder.prepare()
+            recorder.start()
+            audioRecorder = recorder
+            isAudioRecording = true
+            audioStartTime = System.currentTimeMillis()
+            Timber.i("Audio recording started: file=${file.name}, path=${file.absolutePath}")
+        } catch (e: Exception) {
+            Timber.e(e, "Audio recording start failed: file=${file.name}")
+            audioRecorder?.runCatching { release() }
+            audioRecorder = null
+            isAudioRecording = false
+            throw e
+        }
+    }
+
+    fun stopAudioRecording(): Long {
+        if (!isAudioRecording) {
+            Timber.w("stopAudioRecording ignored: not currently recording")
+            return 0L
+        }
+        val duration = System.currentTimeMillis() - audioStartTime
+        try {
+            audioRecorder?.stop()
+        } catch (e: Exception) {
+            Timber.e(e, "Audio recording stop() failed, will still release recorder")
+        }
+        audioRecorder?.runCatching { release() }
+        audioRecorder = null
+        isAudioRecording = false
+        Timber.i("Audio recording stopped: duration_ms=$duration")
+        return duration
     }
 
     /** 切换前置/后置摄像头 */
