@@ -537,6 +537,15 @@ class Camera2Preview(private val context: Context) {
         }
     }
 
+    /** 兼容新旧 Android 的 MediaRecorder 构造：API 31+ 用 Context 构造，老版本用无参构造。 */
+    private fun newMediaRecorder(): MediaRecorder =
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            MediaRecorder(context)
+        } else {
+            @Suppress("DEPRECATION")
+            MediaRecorder()
+        }
+
     fun startLocalRecording(outputFile: File) {
         if (isRecording) return
         val camera = cameraDevice ?: return
@@ -546,7 +555,7 @@ class Camera2Preview(private val context: Context) {
         val app = context.applicationContext as? com.hdcollection.enforcement.EnforcementApp
         val audioOn = app?.remoteConfigManager?.config?.value?.audioEnabled ?: true
 
-        val recorder = MediaRecorder(context).apply {
+        val recorder = newMediaRecorder().apply {
             if (audioOn) setAudioSource(MediaRecorder.AudioSource.CAMCORDER)
             setVideoSource(MediaRecorder.VideoSource.SURFACE)
             setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
@@ -617,13 +626,9 @@ class Camera2Preview(private val context: Context) {
             return
         }
         try {
-            val recorder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                MediaRecorder(context)
-            } else {
-                @Suppress("DEPRECATION")
-                MediaRecorder()
-            }
-            recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+            val recorder = newMediaRecorder()
+            // VOICE_RECOGNITION 比 MIC 优先级更高，在部分设备（如老 2 的 smarteye.mcu 占麦）可绕开 audio policy 冲突
+            recorder.setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
             recorder.setAudioSamplingRate(44100)
