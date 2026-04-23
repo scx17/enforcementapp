@@ -44,7 +44,11 @@ class PlaybackActivity : AppCompatActivity() {
 
         viewPager.adapter = PlaybackPagerAdapter(this)
         TabLayoutMediator(tabLayout, viewPager) { tab, position ->
-            tab.text = if (position == 0) "视频回放" else "图片回放"
+            tab.text = when (position) {
+                0 -> "视频回放"
+                1 -> "图片回放"
+                else -> "音频回放"
+            }
         }.attach()
 
         // 全部上传按钮
@@ -142,7 +146,7 @@ class PlaybackActivity : AppCompatActivity() {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val type = if (file.extension in listOf("mp4", "3gp")) "video" else "image"
+                val type = fileUploadType(file)
                 uploadService.enqueue(settings.deviceId, type, file, null, null, file.lastModified())
                 uploadService.processPendingUploads()
                 uploadStates[file.absolutePath] = "uploaded"
@@ -152,6 +156,13 @@ class PlaybackActivity : AppCompatActivity() {
             }
             runOnUiThread { adapter.notifyItemChanged(position) }
         }
+    }
+
+    /** 按扩展名判定上传类型：mp4/3gp → video，m4a/aac/amr → audio，其余按 image */
+    private fun fileUploadType(file: File): String = when (file.extension.lowercase()) {
+        "mp4", "3gp" -> "video"
+        "m4a", "aac", "amr", "mp3" -> "audio"
+        else -> "image"
     }
 
     /** 全部上传 */
@@ -176,7 +187,7 @@ class PlaybackActivity : AppCompatActivity() {
         CoroutineScope(Dispatchers.IO).launch {
             pending.forEachIndexed { idx, file ->
                 try {
-                    val type = if (file.extension in listOf("mp4", "3gp")) "video" else "image"
+                    val type = fileUploadType(file)
                     uploadService.enqueue(settings.deviceId, type, file, null, null, file.lastModified())
                     uploadService.processPendingUploads()
                     uploadStates[file.absolutePath] = "uploaded"
@@ -313,15 +324,24 @@ class PlaybackActivity : AppCompatActivity() {
         viewPager.setCurrentItem(currentItem, false)
         val tabLayout = findViewById<com.google.android.material.tabs.TabLayout>(R.id.tabLayout)
         TabLayoutMediator(tabLayout, viewPager) { tab, position ->
-            tab.text = if (position == 0) "视频回放" else "图片回放"
+            tab.text = when (position) {
+                0 -> "视频回放"
+                1 -> "图片回放"
+                else -> "音频回放"
+            }
         }.attach()
     }
 
     inner class PlaybackPagerAdapter(activity: AppCompatActivity) :
         FragmentStateAdapter(activity) {
-        override fun getItemCount() = 2
-        override fun createFragment(position: Int) =
-            MediaListFragment.newInstance(if (position == 0) "recordings" else "photos")
+        override fun getItemCount() = 3
+        override fun createFragment(position: Int) = MediaListFragment.newInstance(
+            when (position) {
+                0 -> "recordings"
+                1 -> "photos"
+                else -> "audios"
+            }
+        )
     }
 }
 
@@ -342,22 +362,26 @@ class MediaListFragment : Fragment() {
             ?.sortedByDescending { it.lastModified() }
             ?: emptyList()
 
-        val isVideo = dirName == "recordings"
+        val mediaType = when (dirName) {
+            "recordings" -> "video"
+            "audios" -> "audio"
+            else -> "image"
+        }
 
         // 更新文件数量
         requireActivity().findViewById<TextView>(R.id.tvFileCount)?.text =
             "${files.size} 个文件"
 
-        Timber.d("PlaybackActivity: found ${files.size} files in $dirName")
+        Timber.d("PlaybackActivity: found ${files.size} files in $dirName (type=$mediaType)")
 
         val activity = requireActivity() as PlaybackActivity
         val recycler = view.findViewById<RecyclerView>(R.id.recyclerView)
         recycler.layoutManager = LinearLayoutManager(requireContext())
-        val adapter = MediaFileAdapter(files, isVideo, activity.uploadStates, activity, onClick = { file ->
-            if (isVideo) {
-                playVideo(file)
-            } else {
-                viewImage(file)
+        val adapter = MediaFileAdapter(files, mediaType, activity.uploadStates, activity, onClick = { file ->
+            when (mediaType) {
+                "video" -> playVideo(file)
+                "audio" -> playAudio(file)
+                else -> viewImage(file)
             }
         }, onUpload = { file, adapterRef, position ->
             activity.uploadSingleFile(file, adapterRef, position)
@@ -365,6 +389,24 @@ class MediaListFragment : Fragment() {
         recycler.adapter = adapter
         activity.currentAdapter = adapter
         activity.currentFiles = files
+    }
+
+    private fun playAudio(file: File) {
+        try {
+            val uri = FileProvider.getUriForFile(
+                requireContext(),
+                "${requireContext().packageName}.fileprovider",
+                file
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "audio/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Timber.w(e, "No external audio player for ${file.name}")
+            android.widget.Toast.makeText(requireContext(), "未找到可用的音频播放器", android.widget.Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun playVideo(file: File) {
@@ -417,7 +459,7 @@ class MediaListFragment : Fragment() {
 
 class MediaFileAdapter(
     private val files: List<File>,
-    private val isVideo: Boolean,
+    private val mediaType: String, // "video" / "image" / "audio"
     private val uploadStates: Map<String, String>,
     private val activity: PlaybackActivity,
     private val onClick: (File) -> Unit,
@@ -520,14 +562,43 @@ class MediaFileAdapter(
 
         holder.btnUpload.setOnClickListener { onUpload(file, this, position) }
 
-        // 缩略图
-        if (isVideo) {
-            holder.ivPlayIcon.visibility = View.VISIBLE
-            loadVideoThumbnail(holder.ivThumbnail, holder.tvDuration, file)
-        } else {
-            holder.ivPlayIcon.visibility = View.GONE
-            holder.tvDuration.visibility = View.GONE
-            loadImageThumbnail(holder.ivThumbnail, file)
+        // 缩略图（ViewHolder 复用：每次显式重置 ivPlayIcon 图标避免错乱）
+        when (mediaType) {
+            "video" -> {
+                holder.ivPlayIcon.visibility = View.VISIBLE
+                holder.ivPlayIcon.setImageResource(android.R.drawable.ic_media_play)
+                loadVideoThumbnail(holder.ivThumbnail, holder.tvDuration, file)
+            }
+            "audio" -> {
+                holder.ivPlayIcon.visibility = View.VISIBLE
+                holder.ivPlayIcon.setImageResource(android.R.drawable.ic_btn_speak_now)
+                holder.ivThumbnail.setImageResource(android.R.color.darker_gray)
+                loadAudioDuration(holder.tvDuration, file)
+            }
+            else -> {
+                holder.ivPlayIcon.visibility = View.GONE
+                holder.tvDuration.visibility = View.GONE
+                loadImageThumbnail(holder.ivThumbnail, file)
+            }
+        }
+    }
+
+    private fun loadAudioDuration(tvDuration: TextView, file: File) {
+        try {
+            val retriever = MediaMetadataRetriever()
+            retriever.setDataSource(file.absolutePath)
+            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+            if (durationMs != null) {
+                val totalSec = durationMs / 1000
+                tvDuration.text = String.format("%02d:%02d", totalSec / 60, totalSec % 60)
+                tvDuration.visibility = View.VISIBLE
+            } else {
+                tvDuration.visibility = View.GONE
+            }
+            retriever.release()
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to read audio duration: ${file.name}")
+            tvDuration.visibility = View.GONE
         }
     }
 

@@ -63,6 +63,17 @@ class FileListSyncService(
             }
         }
 
+        // 扫描音频 — 音频无缩略图，includeThumbnail 始终为 false
+        val audioDir = File(context.filesDir, "audios")
+        audioDir.listFiles()?.filter { it.extension in listOf("m4a", "aac", "mp3") }?.forEach { file ->
+            allFileNames.put(file.name)
+            val lastMod = syncedFiles[file.name]
+            if (lastMod == null || lastMod != file.lastModified()) {
+                files.put(buildFileJson(file, "audio", includeThumbnail = false))
+                syncedFiles[file.name] = file.lastModified()
+            }
+        }
+
         // 清除 syncedFiles 中设备上已删除的文件缓存
         val currentNames = (0 until allFileNames.length()).map { allFileNames.getString(it) }.toSet()
         syncedFiles.keys.removeAll { it !in currentNames }
@@ -124,7 +135,7 @@ class FileListSyncService(
             put("fileType", fileType)
             put("fileSize", file.length())
             put("recordTime", dateFormat.format(Date(file.lastModified())))
-            if (fileType == "video") put("duration", getVideoDuration(file))
+            if (fileType == "video" || fileType == "audio") put("duration", getMediaDuration(file))
             if (thumb != null) put("thumbnailBase64", thumb)
         }
     }
@@ -153,7 +164,7 @@ class FileListSyncService(
         }
     }
 
-    private fun getVideoDuration(file: File): Int {
+    private fun getMediaDuration(file: File): Int {
         return try {
             val retriever = MediaMetadataRetriever()
             retriever.setDataSource(file.absolutePath)
@@ -161,7 +172,7 @@ class FileListSyncService(
             retriever.release()
             (duration?.toLongOrNull() ?: 0L).toInt() / 1000
         } catch (e: Exception) {
-            Timber.w(e, "获取视频时长失败: ${file.name}")
+            Timber.w(e, "获取媒体时长失败: ${file.name}")
             0
         }
     }

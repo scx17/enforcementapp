@@ -255,9 +255,11 @@ class EnforcementApp : Application() {
     private suspend fun pullAndUploadFile(fileName: String, settings: AppSettings) {
         val recDir = File(filesDir, "recordings")
         val photoDir = File(filesDir, "photos")
+        val audioDir = File(filesDir, "audios")
         val file = listOfNotNull(
             recDir?.let { java.io.File(it, fileName) },
-            photoDir?.let { java.io.File(it, fileName) }
+            photoDir?.let { java.io.File(it, fileName) },
+            audioDir?.let { java.io.File(it, fileName) }
         ).firstOrNull { it.exists() }
 
         if (file == null) {
@@ -266,7 +268,11 @@ class EnforcementApp : Application() {
             return
         }
 
-        val fileType = if (file.extension in listOf("mp4", "3gp")) "video" else "image"
+        val fileType = when (file.extension.lowercase()) {
+            "mp4", "3gp" -> "video"
+            "m4a", "aac", "mp3" -> "audio"
+            else -> "image"
+        }
         val uploadClient = okhttp3.OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.MINUTES)
