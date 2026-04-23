@@ -1,9 +1,11 @@
 package com.hdcollection.enforcement.ui.main
 
 import android.Manifest
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.graphics.Color
 import android.hardware.camera2.CameraManager
 import android.os.BatteryManager
@@ -681,6 +683,22 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         }
     }
 
+    /**
+     * 老2 (BT280T) 厂商预装 com.smarteye.mcu 常驻打开 AudioRecord，Android 7.1 的 audio policy
+     * 不允许第二路录音（status -38）。此方法仅在 BT280T 上调用 killBackgroundProcesses 让开麦克风，
+     * 其它机型直接返回。
+     */
+    private fun releaseMicFromMcu() {
+        if (!Build.MODEL.equals("BT280T", ignoreCase = true)) return
+        try {
+            val am = getSystemService(ACTIVITY_SERVICE) as? ActivityManager ?: return
+            am.killBackgroundProcesses("com.smarteye.mcu")
+            Timber.i("老2 释放麦克风：已 kill com.smarteye.mcu 后台进程")
+        } catch (e: Exception) {
+            Timber.w(e, "releaseMicFromMcu failed")
+        }
+    }
+
     private fun showLightPanel() {
         LightPanelFragment().show(supportFragmentManager, "light_panel")
     }
@@ -724,6 +742,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
                 }
             }
         } else {
+            releaseMicFromMcu()
             val dir = File(filesDir, "recordings").apply { mkdirs() }
             val file = File(dir, "rec_${System.currentTimeMillis()}.mp4")
             currentRecordFile = file
@@ -791,6 +810,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             }
         } else {
             // ── 启动 ──
+            releaseMicFromMcu()
             val dir = File(filesDir, "audios").apply { mkdirs() }
             val file = File(dir, "audio_${System.currentTimeMillis()}.m4a")
             currentAudioFile = file
