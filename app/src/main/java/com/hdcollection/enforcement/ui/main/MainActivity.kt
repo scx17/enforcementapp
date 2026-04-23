@@ -10,7 +10,6 @@ import android.os.BatteryManager
 import android.media.MediaActionSound
 import android.media.MediaPlayer
 import android.os.Bundle
-import android.speech.tts.TextToSpeech
 import android.os.Handler
 import android.os.Looper
 import android.view.KeyEvent
@@ -81,10 +80,6 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
 
     // 语音提示播放器
     private var voicePlayer: MediaPlayer? = null
-
-    // 系统 TTS（用于录音开始/停止提示，避免复用"开始录像"的 mp3 误读）
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
 
     // 系统快门音
     private val shutterSound = MediaActionSound()
@@ -178,17 +173,6 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         // 预加载快门音
         shutterSound.load(MediaActionSound.SHUTTER_CLICK)
 
-        // 初始化 TTS（录音提示用）
-        tts = TextToSpeech(this) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                val result = tts?.setLanguage(Locale.CHINA)
-                ttsReady = result != TextToSpeech.LANG_MISSING_DATA && result != TextToSpeech.LANG_NOT_SUPPORTED
-                Timber.i("TTS 初始化完成: ready=$ttsReady")
-            } else {
-                Timber.w("TTS 初始化失败: status=$status")
-            }
-        }
-
         setupBottomButtons()
         updateDeviceInfo()
         updateStreamStatus("初始化", "#9E9E9E")
@@ -281,7 +265,6 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         audioTimerHandler.removeCallbacks(audioTimerRunnable)
         voicePlayer?.release()
         shutterSound.release()
-        try { tts?.stop(); tts?.shutdown() } catch (_: Exception) {}
         mediaService?.removeListener(this)
         mediaService?.detachPreview()
         try { unbindService(mediaServiceConnection) } catch (_: Exception) {}
@@ -630,15 +613,6 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         }
     }
 
-    /** 使用系统 TTS 播报文字（用于录音等暂无定制 mp3 的提示） */
-    private fun speakText(text: String) {
-        if (!ttsReady) {
-            Timber.w("TTS 未就绪，跳过播报: $text")
-            return
-        }
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "tts_${System.currentTimeMillis()}")
-    }
-
     private fun showLightPanel() {
         LightPanelFragment().show(supportFragmentManager, "light_panel")
     }
@@ -723,7 +697,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             val file = currentAudioFile
             val duration = service.stopAudioRecording()
             currentAudioFile = null
-            speakText("停止录音")
+            playVoice(R.raw.voice_stop_audio)
             showAudioRecordingIndicator(false)
             Toast.makeText(this, "音频已保存 ${duration / 1000}s", Toast.LENGTH_SHORT).show()
             Timber.i("Audio recording stopped: file=${file?.name}, duration_ms=$duration")
@@ -761,7 +735,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
                 return
             }
             audioTimerStart = System.currentTimeMillis()
-            speakText("开始录音")
+            playVoice(R.raw.voice_start_audio)
             showAudioRecordingIndicator(true)
             Toast.makeText(this, "音频开始录制", Toast.LENGTH_SHORT).show()
             Timber.i("Audio recording started: file=${file.name}")
