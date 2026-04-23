@@ -29,6 +29,7 @@ import com.hdcollection.enforcement.R
 import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.hardware.DeviceHardwareManager
 import com.hdcollection.enforcement.hardware.HardwareKeyReceiver
+import com.hdcollection.enforcement.hardware.KeyProfile
 import com.hdcollection.enforcement.hardware.LightState
 import com.hdcollection.enforcement.ui.LightPanelFragment
 import com.hdcollection.enforcement.ui.function.FunctionActivity
@@ -98,6 +99,13 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             recordingTimerHandler.postDelayed(this, 1000)
         }
     }
+
+    // dispatchKeyEvent 长按状态机（非广播机型使用）
+    private val longPressHandler = Handler(Looper.getMainLooper())
+    private var pendingLongPress: Runnable? = null
+    private var downLogical: KeyProfile.Logical? = null
+    private var longPressFired = false
+    private val LONG_PRESS_MS = 600L
 
     // 音频录制
     private var currentAudioFile: File? = null
@@ -263,6 +271,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         try { unregisterReceiver(usbStateReceiver) } catch (_: Exception) {}
         recordingTimerHandler.removeCallbacks(recordingTimerRunnable)
         audioTimerHandler.removeCallbacks(audioTimerRunnable)
+        pendingLongPress?.let { longPressHandler.removeCallbacks(it) }
         voicePlayer?.release()
         shutterSound.release()
         mediaService?.removeListener(this)
@@ -473,6 +482,65 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
         Timber.d("返回键被拦截，执法仪主应用禁止退出")
+    }
+
+    /**
+     * 拦截非广播机型（老2/红点1）的硬件按键，翻译为 HardwareKeyReceiver.KeyAction 后
+     * 走同一条 handleHardwareKey() 分发链。广播机型（标3）直接放行给 super。
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (!KeyProfile.needsDispatchIntercept()) return super.dispatchKeyEvent(event)
+        val logical = KeyProfile.resolve(event)
+        Timber.v("dispatchKeyEvent: action=${event.action} keyCode=${event.keyCode} scanCode=${event.scanCode} repeat=${event.repeatCount} → $logical")
+        if (logical == null) return super.dispatchKeyEvent(event)
+        if (event.repeatCount > 0) return true // 过滤系统自动 repeat
+
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> {
+                if (logical == KeyProfile.Logical.PTT) {
+                    handleHardwareKey(HardwareKeyReceiver.KeyAction.PTT_DOWN)
+                } else {
+                    downLogical = logical
+                    longPressFired = false
+                    pendingLongPress?.let { longPressHandler.removeCallbacks(it) }
+                    val r = Runnable {
+                        longPressFired = true
+                        toLongPressAction(logical)?.let { handleHardwareKey(it) }
+                    }
+                    pendingLongPress = r
+                    longPressHandler.postDelayed(r, LONG_PRESS_MS)
+                }
+            }
+            KeyEvent.ACTION_UP -> {
+                if (logical == KeyProfile.Logical.PTT) {
+                    handleHardwareKey(HardwareKeyReceiver.KeyAction.PTT_UP)
+                } else {
+                    pendingLongPress?.let { longPressHandler.removeCallbacks(it) }
+                    pendingLongPress = null
+                    if (!longPressFired && downLogical == logical) {
+                        toPressAction(logical)?.let { handleHardwareKey(it) }
+                    }
+                    downLogical = null
+                }
+            }
+        }
+        return true
+    }
+
+    private fun toPressAction(l: KeyProfile.Logical): HardwareKeyReceiver.KeyAction? = when (l) {
+        KeyProfile.Logical.VIDEO -> HardwareKeyReceiver.KeyAction.VIDEO_PRESS
+        KeyProfile.Logical.PHOTO -> HardwareKeyReceiver.KeyAction.PHOTO_PRESS
+        KeyProfile.Logical.RECORD -> HardwareKeyReceiver.KeyAction.RECORD_PRESS
+        KeyProfile.Logical.SOS -> HardwareKeyReceiver.KeyAction.SOS_PRESS
+        else -> null
+    }
+
+    private fun toLongPressAction(l: KeyProfile.Logical): HardwareKeyReceiver.KeyAction? = when (l) {
+        KeyProfile.Logical.VIDEO -> HardwareKeyReceiver.KeyAction.VIDEO_LONG_PRESS
+        KeyProfile.Logical.PHOTO -> HardwareKeyReceiver.KeyAction.PHOTO_LONG_PRESS
+        KeyProfile.Logical.RECORD -> HardwareKeyReceiver.KeyAction.RECORD_LONG_PRESS
+        KeyProfile.Logical.SOS -> HardwareKeyReceiver.KeyAction.SOS_LONG_PRESS
+        else -> null
     }
 
     // 物理按键绑定（DSJ-Z6 执法仪）
