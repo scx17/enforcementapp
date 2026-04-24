@@ -44,6 +44,7 @@ class PlatformNotificationService(
 
     var onNotificationReceived: ((PlatformNotification) -> Unit)? = null
     var onPullFileRequested: ((String) -> Unit)? = null
+    var onPullLogRequested: (() -> Unit)? = null
     var onWorkTaskReceived: ((String, String) -> Unit)? = null  // (title, priority)
     var onConfigPushReceived: ((org.json.JSONObject) -> Unit)? = null
     var onCustomCodeChanged: ((String) -> Unit)? = null
@@ -102,6 +103,12 @@ class PlatformNotificationService(
                 } catch (e: Exception) {
                     Timber.e(e, "PullFile 命令解析失败")
                 }
+            }, String::class.java)
+
+            // 监听管理端强制拉取日志命令
+            conn.on("PullLog", { _: String ->
+                Timber.i("PullLog 命令: 管理端触发立即上传日志")
+                onPullLogRequested?.invoke()
             }, String::class.java)
 
             // 监听对讲音频（平台→设备）

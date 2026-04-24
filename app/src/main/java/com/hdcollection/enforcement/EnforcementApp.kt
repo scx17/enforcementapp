@@ -148,6 +148,32 @@ class EnforcementApp : Application() {
             }
         }
 
+        // 监听 PullLog 命令 → 立即上传所有日志（含当天），用于远程排障
+        notificationService.onPullLogRequested = {
+            UserOpLogger.record(
+                operationType = "RespondPullLog",
+                description = "响应平台强制拉取日志指令",
+                targetType = "log",
+                targetId = null,
+                critical = true
+            )
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val logUploaderClient = okhttp3.OkHttpClient.Builder()
+                        .connectTimeout(30, TimeUnit.SECONDS)
+                        .writeTimeout(2, TimeUnit.MINUTES)
+                        .readTimeout(30, TimeUnit.SECONDS)
+                        .build()
+                    val logDir = getExternalFilesDir("logs") ?: File(filesDir, "logs")
+                    val uploader = com.hdcollection.enforcement.logging.LogUploader(settings, logUploaderClient, logDir)
+                    uploader.uploadAllIncludingToday()
+                    Timber.i("PullLog 响应完成")
+                } catch (e: Exception) {
+                    Timber.e(e, "PullLog 响应失败")
+                }
+            }
+        }
+
         // WorkManager 注册移到后台线程：首次安装时 Room DB 建表可能耗时 2-3 秒，阻塞主线程会触发 ANR
         CoroutineScope(Dispatchers.IO).launch {
             try {

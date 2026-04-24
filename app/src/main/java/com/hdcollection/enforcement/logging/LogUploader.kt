@@ -73,6 +73,16 @@ class LogUploader(
         }
     }
 
+    /** 管理端下发 PullLog 命令时调用：上传所有日志（含当天），用于远程排障。 */
+    suspend fun uploadAllIncludingToday() = withContext(Dispatchers.IO) {
+        val logFiles = logDir.listFiles { f -> f.name.startsWith("app_") && f.name.endsWith(".log") }
+            ?.sortedBy { it.name } ?: return@withContext
+        Timber.i("LogUploader: PullLog 触发，上传 ${logFiles.size} 个日志文件（含当天）")
+        for (file in logFiles) {
+            upload(file)
+        }
+    }
+
     /** 清理超过保留天数的旧日志文件 */
     fun cleanOldLogs() {
         val cal = Calendar.getInstance()
