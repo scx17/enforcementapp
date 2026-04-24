@@ -233,12 +233,13 @@ class PlaybackActivity : AppCompatActivity() {
 
     private fun selectAllUploaded() {
         val files = currentFiles ?: return
-        val uploadedFiles = files.filter { uploadStates[it.absolutePath] == "uploaded" }
-        if (selectedFiles.size == uploadedFiles.size) {
+        if (files.isEmpty()) return
+        // 再次点击相当于取消全选
+        if (selectedFiles.size == files.size) {
             selectedFiles.clear()
         } else {
             selectedFiles.clear()
-            uploadedFiles.forEach { selectedFiles.add(it.absolutePath) }
+            files.forEach { selectedFiles.add(it.absolutePath) }
         }
         updateDeleteButtonText()
         currentAdapter?.notifyDataSetChanged()
@@ -278,9 +279,16 @@ class PlaybackActivity : AppCompatActivity() {
     private fun confirmDeleteSelected() {
         val count = selectedFiles.size
         if (count == 0) return
+        val notUploaded = selectedFiles.count { uploadStates[it] != "uploaded" }
+        val uploaded = count - notUploaded
+        val msg = buildString {
+            append("确定删除 $count 个文件？\n")
+            if (uploaded > 0) append("· $uploaded 个已上传，本地删除不影响服务器副本。\n")
+            if (notUploaded > 0) append("⚠ $notUploaded 个尚未上传，删除后无法恢复。\n")
+        }
         android.app.AlertDialog.Builder(this)
             .setTitle("批量删除")
-            .setMessage("确定删除 $count 个已上传文件？\n本地删除不影响服务器副本。")
+            .setMessage(msg.trim())
             .setPositiveButton("删除") { _, _ -> deleteSelectedFiles() }
             .setNegativeButton("取消", null)
             .show()
@@ -490,8 +498,8 @@ class MediaFileAdapter(
         val state = uploadStates[file.absolutePath]
         val isUploaded = state == "uploaded"
 
-        // CheckBox — 管理模式下，已上传的文件显示
-        if (activity.isManageMode && isUploaded) {
+        // CheckBox — 管理模式下所有文件均可勾选，删除时再对未上传文件发警告
+        if (activity.isManageMode) {
             holder.cbSelect.visibility = View.VISIBLE
             holder.cbSelect.setOnCheckedChangeListener(null)
             holder.cbSelect.isChecked = activity.selectedFiles.contains(file.absolutePath)
