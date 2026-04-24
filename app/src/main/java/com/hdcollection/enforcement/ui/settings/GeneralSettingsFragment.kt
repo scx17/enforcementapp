@@ -14,6 +14,16 @@ class GeneralSettingsFragment : Fragment() {
     private val resolutions = listOf("720P", "1080P", "1440P")
     private val segmentOptions = listOf("5 分钟", "10 分钟", "30 分钟")
     private val segmentValues = listOf(5, 10, 30)
+    private val bitrateOptions = listOf(
+        "512 kbps (流畅)",
+        "1024 kbps (标清)",
+        "2048 kbps (高清)",
+        "3072 kbps (超清)",
+        "4096 kbps (蓝光)",
+        "6144 kbps (蓝光+)",
+        "8192 kbps (原画)"
+    )
+    private val bitrateValues = listOf(512, 1024, 2048, 3072, 4096, 6144, 8192)
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         _binding = FragmentSettingsGeneralBinding.inflate(inflater, container, false)
@@ -28,7 +38,15 @@ class GeneralSettingsFragment : Fragment() {
         resAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         binding.spinnerResolution.adapter = resAdapter
         binding.spinnerResolution.setSelection(resolutions.indexOf(settings.videoResolution).coerceAtLeast(0))
-        binding.etBitrate.setText(settings.videoBitrate.toString())
+
+        // 码率
+        val bitrateAdapter = ArrayAdapter(requireContext(), android.R.layout.simple_spinner_item, bitrateOptions)
+        bitrateAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        binding.spinnerBitrate.adapter = bitrateAdapter
+        val currentBitrate = settings.videoBitrate
+        val bitrateIdx = bitrateValues.indexOf(currentBitrate)
+            .let { if (it < 0) bitrateValues.indexOf(2048) else it }
+        binding.spinnerBitrate.setSelection(bitrateIdx)
 
         // 录像片段时长
         val segAdapter = ArrayAdapter(requireContext(), android.R.layout.simple_spinner_item, segmentOptions)
@@ -40,7 +58,7 @@ class GeneralSettingsFragment : Fragment() {
 
         binding.btnSaveGeneral.setOnClickListener {
             settings.videoResolution = resolutions[binding.spinnerResolution.selectedItemPosition]
-            settings.videoBitrate = binding.etBitrate.text.toString().toIntOrNull() ?: 2048
+            settings.videoBitrate = bitrateValues[binding.spinnerBitrate.selectedItemPosition]
             settings.recordingSegmentMinutes = segmentValues[binding.spinnerSegment.selectedItemPosition]
             Toast.makeText(context, "通用配置已保存", Toast.LENGTH_SHORT).show()
         }
