@@ -82,73 +82,7 @@ class ServerSettingsFragment : Fragment() {
                 Toast.makeText(context, "设备编号不可用，请更换", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-
-            binding.btnAutoConfig.isEnabled = false
-            binding.btnAutoConfig.text = "配置中..."
-
-            Thread {
-                try {
-                    val imei = getImei()
-                    val url = "$apiUrl/api/device/config"
-                    val client = okhttp3.OkHttpClient.Builder()
-                        .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-                        .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-                        .build()
-                    val body = okhttp3.RequestBody.create(
-                        "application/json".toMediaTypeOrNull(),
-                        """{"customCode":"$customCode","imei":"$imei"}"""
-                    )
-                    val request = okhttp3.Request.Builder().url(url).post(body).build()
-                    val response = client.newCall(request).execute()
-                    val json = response.body?.string() ?: ""
-                    val root = com.google.gson.JsonParser.parseString(json).asJsonObject
-
-                    if (!root.get("success").asBoolean) {
-                        val reason = root.get("reason")?.asString ?: ""
-                        if (reason == "already_used") {
-                            val suggestion = root.get("suggestion")?.asString
-                            throw Exception("编号已被占用" + if (suggestion != null) "，建议: $suggestion" else "")
-                        }
-                        throw Exception(root.get("message")?.asString ?: "服务器返回失败")
-                    }
-
-                    val data = root.getAsJsonObject("data")
-                    val sipServer = data.get("sipServer").asString
-                    val sipPort = data.get("sipPort").asString
-                    val sipPassword = data.get("sipPassword").asString
-                    val sipDeviceId = data.get("sipDeviceId").asString
-                    val returnedCode = data.get("customCodeDisplay")?.asString ?: customCode
-
-                    Timber.i("自动配置成功: SipDeviceId=$sipDeviceId, CustomCode=$returnedCode, IMEI=$imei")
-
-                    // 保存配置
-                    settings.platformApiUrl = apiUrl
-                    settings.sipServer = sipServer
-                    settings.sipPort = sipPort
-                    settings.sipUsername = sipDeviceId
-                    settings.sipPassword = sipPassword
-                    settings.deviceId = sipDeviceId
-                    settings.customCode = returnedCode
-                    settings.customCodeUpdatedAt = System.currentTimeMillis()
-
-                    activity?.runOnUiThread {
-                        binding.etSipServer.setText(sipServer)
-                        binding.etSipPort.setText(sipPort)
-                        binding.etSipUsername.setText(sipDeviceId)
-                        binding.etSipPassword.setText(sipPassword)
-                        binding.btnAutoConfig.isEnabled = true
-                        binding.btnAutoConfig.text = "从平台自动获取以下配置"
-                        Toast.makeText(context, "配置成功！编号: $returnedCode", Toast.LENGTH_LONG).show()
-                    }
-                } catch (e: Exception) {
-                    Timber.e(e, "自动配置失败")
-                    activity?.runOnUiThread {
-                        binding.btnAutoConfig.isEnabled = true
-                        binding.btnAutoConfig.text = "从平台自动获取以下配置"
-                        Toast.makeText(context, "自动配置失败: ${e.message}", Toast.LENGTH_LONG).show()
-                    }
-                }
-            }.start()
+            runAutoConfig(apiUrl, customCode, triggerSipReload = false, alsoFinishSave = false)
         }
 
         // 扫码按钮
@@ -164,17 +98,132 @@ class ServerSettingsFragment : Fragment() {
                 Toast.makeText(context, "请输入设备编号（3-7 位）", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            settings.platformApiUrl = binding.etApiUrl.text.toString().trim()
-            settings.sipServer = binding.etSipServer.text.toString().trim()
-            settings.sipPort = binding.etSipPort.text.toString().trim().ifEmpty { "5060" }
-            settings.sipUsername = binding.etSipUsername.text.toString().trim()
-            settings.sipPassword = binding.etSipPassword.text.toString()
-            settings.logUploadInterval = binding.etLogInterval.text.toString().toIntOrNull() ?: 60
-            settings.customCode = customCode
-            val username = binding.etSipUsername.text.toString().trim()
-            if (username.isNotEmpty()) settings.deviceId = username
-            Toast.makeText(context, "配置已保存", Toast.LENGTH_SHORT).show()
+            val newApiUrl = binding.etApiUrl.text.toString().trim().trimEnd('/')
+            val newSipServer = binding.etSipServer.text.toString().trim()
+            val platformChanged = newApiUrl != settings.platformApiUrl
+                    || newSipServer != settings.sipServer
+                    || settings.deviceId.isBlank()
+            val codeChanged = customCode != settings.customCode
+
+            if (platformChanged || codeChanged) {
+                // 服务器或设备编号有变 → 必须重新向平台注册，拿回新的 sipDeviceId
+                if (newApiUrl.isEmpty()) {
+                    Toast.makeText(context, "请输入平台地址", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                if (!codeAvailable) {
+                    Toast.makeText(context, "设备编号校验未通过，请等待或更换", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                runAutoConfig(newApiUrl, customCode, triggerSipReload = true, alsoFinishSave = true)
+            } else {
+                // 只是调整端口/密码/日志间隔 — 直接保存并重载 SIP
+                settings.sipPort = binding.etSipPort.text.toString().trim().ifEmpty { "5060" }
+                settings.sipPassword = binding.etSipPassword.text.toString()
+                settings.logUploadInterval = binding.etLogInterval.text.toString().toIntOrNull() ?: 60
+                val username = binding.etSipUsername.text.toString().trim()
+                if (username.isNotEmpty()) {
+                    settings.sipUsername = username
+                    settings.deviceId = username
+                }
+                reloadSip()
+                Toast.makeText(context, "配置已保存", Toast.LENGTH_SHORT).show()
+            }
         }
+    }
+
+    /** 向平台提交 customCode+imei 注册设备，拿回 sipDeviceId 等信息并写入 settings。*/
+    private fun runAutoConfig(
+        apiUrl: String,
+        customCode: String,
+        triggerSipReload: Boolean,
+        alsoFinishSave: Boolean
+    ) {
+        binding.btnAutoConfig.isEnabled = false
+        binding.btnAutoConfig.text = "配置中..."
+        binding.btnSave.isEnabled = false
+
+        Thread {
+            try {
+                val imei = getImei()
+                val url = "$apiUrl/api/device/config"
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+                val body = okhttp3.RequestBody.create(
+                    "application/json".toMediaTypeOrNull(),
+                    """{"customCode":"$customCode","imei":"$imei"}"""
+                )
+                val request = okhttp3.Request.Builder().url(url).post(body).build()
+                val response = client.newCall(request).execute()
+                val json = response.body?.string() ?: ""
+                val root = com.google.gson.JsonParser.parseString(json).asJsonObject
+
+                if (!root.get("success").asBoolean) {
+                    val reason = root.get("reason")?.asString ?: ""
+                    if (reason == "already_used") {
+                        val suggestion = root.get("suggestion")?.asString
+                        throw Exception("编号已被占用" + if (suggestion != null) "，建议: $suggestion" else "")
+                    }
+                    throw Exception(root.get("message")?.asString ?: "服务器返回失败")
+                }
+
+                val data = root.getAsJsonObject("data")
+                val sipServer = data.get("sipServer").asString
+                val sipPort = data.get("sipPort").asString
+                val sipPassword = data.get("sipPassword").asString
+                val sipDeviceId = data.get("sipDeviceId").asString
+                val returnedCode = data.get("customCodeDisplay")?.asString ?: customCode
+
+                Timber.i("自动配置成功: SipDeviceId=$sipDeviceId, CustomCode=$returnedCode, IMEI=$imei, Platform=$apiUrl")
+
+                // 保存配置
+                settings.platformApiUrl = apiUrl
+                settings.sipServer = sipServer
+                settings.sipPort = sipPort
+                settings.sipUsername = sipDeviceId
+                settings.sipPassword = sipPassword
+                settings.deviceId = sipDeviceId
+                settings.customCode = returnedCode
+                settings.customCodeUpdatedAt = System.currentTimeMillis()
+
+                if (alsoFinishSave) {
+                    settings.logUploadInterval = binding.etLogInterval.text.toString().toIntOrNull() ?: 60
+                }
+
+                activity?.runOnUiThread {
+                    binding.etSipServer.setText(sipServer)
+                    binding.etSipPort.setText(sipPort)
+                    binding.etSipUsername.setText(sipDeviceId)
+                    binding.etSipPassword.setText(sipPassword)
+                    binding.btnAutoConfig.isEnabled = true
+                    binding.btnAutoConfig.text = "从平台自动获取以下配置"
+                    binding.btnSave.isEnabled = true
+                    val toastMsg = if (alsoFinishSave) "配置已保存，编号: $returnedCode" else "配置成功！编号: $returnedCode"
+                    Toast.makeText(context, toastMsg, Toast.LENGTH_LONG).show()
+                    if (triggerSipReload) reloadSip()
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "自动配置失败")
+                activity?.runOnUiThread {
+                    binding.btnAutoConfig.isEnabled = true
+                    binding.btnAutoConfig.text = "从平台自动获取以下配置"
+                    binding.btnSave.isEnabled = true
+                    Toast.makeText(context, "自动配置失败: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    /** 通知 MediaCaptureService 用最新配置重新注册 GB28181。*/
+    private fun reloadSip() {
+        val ctx = context ?: return
+        val intent = Intent(ctx, com.hdcollection.enforcement.service.MediaCaptureService::class.java).apply {
+            action = com.hdcollection.enforcement.service.MediaCaptureService.ACTION_RELOAD_GB28181
+        }
+        androidx.core.content.ContextCompat.startForegroundService(ctx, intent)
+        Timber.i("已通知 MediaCaptureService 重载 GB28181 配置")
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

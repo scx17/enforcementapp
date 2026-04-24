@@ -71,9 +71,26 @@ class MediaCaptureService : Service(), StreamCallback {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Timber.i("MediaCaptureService onStartCommand")
+        Timber.i("MediaCaptureService onStartCommand action=${intent?.action}")
+        if (intent?.action == ACTION_RELOAD_GB28181) {
+            reloadGb28181()
+        }
         return START_STICKY
     }
+
+    /** 配置变更（扫码/自动配置后）调用：销毁旧 GB28181 连接并按新设置重新注册，摄像头保持运行。 */
+    private fun reloadGb28181() {
+        Timber.i("GB28181 配置 reload: deviceId=${settings.deviceId}, sipServer=${settings.sipServer}:${settings.sipPort}")
+        try {
+            gb28181Manager?.unregister()
+            gb28181Manager?.destroy()
+        } catch (e: Exception) {
+            Timber.w(e, "GB28181 销毁旧连接异常，继续重建")
+        }
+        gb28181Manager = GB28181Manager(settings, this).also { it.register() }
+        Timber.i("GB28181Manager 已按新配置重新注册")
+    }
+
 
     override fun onBind(intent: Intent?): IBinder = binder
 
@@ -218,5 +235,6 @@ class MediaCaptureService : Service(), StreamCallback {
     companion object {
         const val CHANNEL_ID = "media_capture_service"
         const val NOTIFICATION_ID = 1001
+        const val ACTION_RELOAD_GB28181 = "com.hdcollection.enforcement.RELOAD_GB28181"
     }
 }
