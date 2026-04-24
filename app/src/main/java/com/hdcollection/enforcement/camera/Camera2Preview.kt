@@ -156,6 +156,12 @@ class Camera2Preview(private val context: Context) {
                     cameraDevice = camera
                     ensureImageReader()
                     Timber.d("Camera opened")
+                    // 如果预览 Surface 已 attach（如 QR 扫码抢占相机后重开场景），主动重建 session，
+                    // 否则 surfaceCreated 已触发过一次、这里不会再回调，主界面会黑屏
+                    if (attachedSurfaceView != null && previewSurfaceOrNull() != null) {
+                        Timber.i("Camera opened with existing preview surface, 主动重建 session")
+                        bgHandler?.post { rebuildCaptureSession() }
+                    }
                     // 切换摄像头后恢复推流
                     if (pendingResumeEncoding && currentRtpIp != null) {
                         pendingResumeEncoding = false

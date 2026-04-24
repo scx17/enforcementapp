@@ -72,10 +72,25 @@ class MediaCaptureService : Service(), StreamCallback {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Timber.i("MediaCaptureService onStartCommand action=${intent?.action}")
-        if (intent?.action == ACTION_RELOAD_GB28181) {
-            reloadGb28181()
+        when (intent?.action) {
+            ACTION_RELOAD_GB28181 -> reloadGb28181()
+            ACTION_REOPEN_CAMERA -> reopenCameraIfNeeded()
         }
         return START_STICKY
+    }
+
+    /** 扫码 / 第三方应用释放相机后调用：如 CameraDevice 被 disconnect，则重新 openCamera。*/
+    private fun reopenCameraIfNeeded() {
+        val cam = camera ?: run {
+            Timber.w("reopenCameraIfNeeded: camera 实例为空，新建 Camera2Preview")
+            Camera2Preview(this).also { camera = it }
+        }
+        // CameraX 在 onDestroy 里释放 camera 是异步的，立即调用 openCamera 很可能拿不到资源，
+        // 延迟 600ms 再请求，start() 内部遇到 cameraDevice=null 会 openCamera
+        android.os.Handler(mainLooper).postDelayed({
+            Timber.i("reopenCameraIfNeeded: 调用 Camera2Preview.start()")
+            cam.start()
+        }, 600)
     }
 
     /** 配置变更（扫码/自动配置后）调用：销毁旧 GB28181 连接并按新设置重新注册，摄像头保持运行。 */
@@ -236,5 +251,6 @@ class MediaCaptureService : Service(), StreamCallback {
         const val CHANNEL_ID = "media_capture_service"
         const val NOTIFICATION_ID = 1001
         const val ACTION_RELOAD_GB28181 = "com.hdcollection.enforcement.RELOAD_GB28181"
+        const val ACTION_REOPEN_CAMERA = "com.hdcollection.enforcement.REOPEN_CAMERA"
     }
 }

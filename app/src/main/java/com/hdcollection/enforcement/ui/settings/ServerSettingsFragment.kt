@@ -24,6 +24,8 @@ class ServerSettingsFragment : Fragment() {
     private val handler = Handler(Looper.getMainLooper())
     private var codeCheckRunnable: Runnable? = null
     private var codeAvailable = false
+    // 扫码后强制走 auto-config，即使 apiUrl / sipServer 和 prefs 相同也要去平台刷一次 gb_device
+    private var scannedSinceOpen = false
 
     companion object {
         private const val REQUEST_QR_SCAN = 2001
@@ -45,6 +47,15 @@ class ServerSettingsFragment : Fragment() {
         binding.etSipUsername.setText(settings.sipUsername.ifEmpty { "" })
         binding.etSipPassword.setText(settings.sipPassword.ifEmpty { "admin123" })
         binding.etLogInterval.setText(settings.logUploadInterval.toString())
+
+        // 进入设置页时，若已保存的 customCode 合法，立即异步校验一次以置 codeAvailable=true，
+        // 否则用户不改 customCode 也无法保存（btnSave 会被"校验未通过"拦下）
+        val savedCode = settings.customCode
+        if (savedCode.length >= 3 && binding.etApiUrl.text.isNotEmpty()) {
+            binding.tvCodeStatus.text = "校验中..."
+            binding.tvCodeStatus.setTextColor(0xFF888888.toInt())
+            checkCode(savedCode)
+        }
 
         // 设备编号输入校验（防抖 300ms）
         binding.etCustomCode.addTextChangedListener(object : TextWatcher {
@@ -105,7 +116,7 @@ class ServerSettingsFragment : Fragment() {
                     || settings.deviceId.isBlank()
             val codeChanged = customCode != settings.customCode
 
-            if (platformChanged || codeChanged) {
+            if (scannedSinceOpen || platformChanged || codeChanged) {
                 // 服务器或设备编号有变 → 必须重新向平台注册，拿回新的 sipDeviceId
                 if (newApiUrl.isEmpty()) {
                     Toast.makeText(context, "请输入平台地址", Toast.LENGTH_SHORT).show()
@@ -191,6 +202,7 @@ class ServerSettingsFragment : Fragment() {
                 if (alsoFinishSave) {
                     settings.logUploadInterval = binding.etLogInterval.text.toString().toIntOrNull() ?: 60
                 }
+                scannedSinceOpen = false
 
                 activity?.runOnUiThread {
                     binding.etSipServer.setText(sipServer)
@@ -253,8 +265,10 @@ class ServerSettingsFragment : Fragment() {
                 binding.etSipServer.setText(sipServer)
                 binding.etSipPort.setText(sipPort)
                 binding.etSipPassword.setText(sipPassword)
+                // 标记此次扫码，后续保存必须强制走一次 auto-config，确保平台 gb_device 记录到位
+                scannedSinceOpen = true
 
-                Toast.makeText(context, "已填充服务器配置，请输入设备编号后保存", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "已填充服务器配置，请确认设备编号后保存", Toast.LENGTH_LONG).show()
             } catch (e: Exception) {
                 Timber.e(e, "解析扫码数据失败")
                 Toast.makeText(context, "二维码格式错误", Toast.LENGTH_SHORT).show()

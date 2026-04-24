@@ -140,5 +140,15 @@ class QrScanActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
+        // CameraX 释放相机需要一点时间，这里通知 MediaCaptureService 恢复主界面相机，避免黑屏
+        try {
+            val intent = Intent(this, com.hdcollection.enforcement.service.MediaCaptureService::class.java).apply {
+                action = com.hdcollection.enforcement.service.MediaCaptureService.ACTION_REOPEN_CAMERA
+            }
+            androidx.core.content.ContextCompat.startForegroundService(this, intent)
+            Timber.i("QrScanActivity.onDestroy: 已通知 MediaCaptureService 恢复相机")
+        } catch (e: Exception) {
+            Timber.w(e, "通知恢复相机失败")
+        }
     }
 }
