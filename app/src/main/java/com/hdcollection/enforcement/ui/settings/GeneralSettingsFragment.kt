@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.view.*
 import android.widget.*
 import androidx.fragment.app.Fragment
+import com.hdcollection.enforcement.R
 import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.databinding.FragmentSettingsGeneralBinding
 
@@ -34,14 +35,14 @@ class GeneralSettingsFragment : Fragment() {
         settings = AppSettings(requireContext().getSharedPreferences("app_settings", 0))
 
         // 分辨率
-        val resAdapter = ArrayAdapter(requireContext(), android.R.layout.simple_spinner_item, resolutions)
-        resAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        val resAdapter = ArrayAdapter(requireContext(), R.layout.item_spinner_dark, resolutions)
+        resAdapter.setDropDownViewResource(R.layout.item_spinner_dark_dropdown)
         binding.spinnerResolution.adapter = resAdapter
         binding.spinnerResolution.setSelection(resolutions.indexOf(settings.videoResolution).coerceAtLeast(0))
 
         // 码率
-        val bitrateAdapter = ArrayAdapter(requireContext(), android.R.layout.simple_spinner_item, bitrateOptions)
-        bitrateAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        val bitrateAdapter = ArrayAdapter(requireContext(), R.layout.item_spinner_dark, bitrateOptions)
+        bitrateAdapter.setDropDownViewResource(R.layout.item_spinner_dark_dropdown)
         binding.spinnerBitrate.adapter = bitrateAdapter
         val currentBitrate = settings.videoBitrate
         val bitrateIdx = bitrateValues.indexOf(currentBitrate)
@@ -49,8 +50,8 @@ class GeneralSettingsFragment : Fragment() {
         binding.spinnerBitrate.setSelection(bitrateIdx)
 
         // 录像片段时长
-        val segAdapter = ArrayAdapter(requireContext(), android.R.layout.simple_spinner_item, segmentOptions)
-        segAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        val segAdapter = ArrayAdapter(requireContext(), R.layout.item_spinner_dark, segmentOptions)
+        segAdapter.setDropDownViewResource(R.layout.item_spinner_dark_dropdown)
         binding.spinnerSegment.adapter = segAdapter
         val currentSeg = settings.recordingSegmentMinutes
         val segIdx = segmentValues.indexOf(currentSeg).coerceAtLeast(0)
