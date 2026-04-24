@@ -153,18 +153,18 @@ class MediaCaptureService : Service(), StreamCallback {
     }
 
     // —— 网络状态回调（从 MainActivity 迁入）——
+    // 实际部署中主网是 SIM 流量，WiFi 只是备用。所以订阅"默认 Internet 网络"，
+    // OS 会在 WiFi/蜂窝之间自动切换并回调 onAvailable，避免只订 WiFi 导致切回蜂窝后永远不再收到事件。
     private fun registerGbNetworkCallback() {
         if (gbNetworkCallback != null) return
         try {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            val req = NetworkRequest.Builder()
-                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-                .build()
             val cb = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
-                    Timber.i("[Service] NetworkCallback: onAvailable network=$network")
+                    val transport = describeTransport(cm, network)
+                    Timber.i("[Service] NetworkCallback: onAvailable network=$network, transport=$transport")
                     gb28181Manager?.boundNetwork = network
-                    gb28181Manager?.triggerReconnect("network onAvailable")
+                    gb28181Manager?.triggerReconnect("network onAvailable($transport)")
                 }
                 override fun onLost(network: Network) {
                     Timber.i("[Service] NetworkCallback: onLost network=$network")
@@ -175,11 +175,29 @@ class MediaCaptureService : Service(), StreamCallback {
                     gb28181Manager?.boundNetwork = network
                 }
             }
-            cm.registerNetworkCallback(req, cb)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                cm.registerDefaultNetworkCallback(cb)
+            } else {
+                // 低版本（API<24）回退：订阅任意具备 INTERNET 能力的网络
+                val req = NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build()
+                cm.registerNetworkCallback(req, cb)
+            }
             gbNetworkCallback = cb
-            Timber.i("[Service] NetworkCallback 已注册")
+            Timber.i("[Service] NetworkCallback 已注册（订阅默认 Internet 网络，WiFi+蜂窝均可）")
         } catch (e: Exception) {
             Timber.w(e, "[Service] 注册 NetworkCallback 失败")
+        }
+    }
+
+    private fun describeTransport(cm: ConnectivityManager, net: Network): String {
+        val caps = try { cm.getNetworkCapabilities(net) } catch (_: Exception) { null } ?: return "unknown"
+        return when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+            else -> "other"
         }
     }
 
