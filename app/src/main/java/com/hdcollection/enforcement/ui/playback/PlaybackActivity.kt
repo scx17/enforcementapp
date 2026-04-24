@@ -27,6 +27,7 @@ import com.hdcollection.enforcement.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.io.File
 import java.text.SimpleDateFormat
@@ -498,12 +499,20 @@ class MediaFileAdapter(
         val layoutUploaded: View = view.findViewById(R.id.layoutUploaded)
         val tvUploaded: TextView = view.findViewById(R.id.tvUploaded)
         val btnDelete: ImageView = view.findViewById(R.id.btnDelete)
+        // 当前绑定的文件路径，用于异步缩略图回调时校验 holder 是否已复用到其它项
+        var boundPath: String? = null
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
         ViewHolder(LayoutInflater.from(parent.context).inflate(R.layout.item_media_file, parent, false))
 
     override fun getItemCount() = files.size
+
+    companion object {
+        // 跨 adapter 实例共享的内存缓存（切 tab / 刷新后缩略图不必重新解码）
+        private val thumbCache = android.util.LruCache<String, Bitmap>(64)
+        private val durationCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    }
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val file = files[position]
@@ -582,76 +591,110 @@ class MediaFileAdapter(
 
         holder.btnUpload.setOnClickListener { onUpload(file, this, position) }
 
-        // 缩略图（ViewHolder 复用：每次显式重置 ivPlayIcon 图标避免错乱）
+        // 缩略图：先用缓存，缺失项扔到 IO 线程解码，完成后回主线程设值
+        holder.boundPath = file.absolutePath
+        bindThumbnail(holder, file, mediaType)
+    }
+
+    private fun bindThumbnail(holder: ViewHolder, file: File, mediaType: String) {
+        val path = file.absolutePath
+        val cachedBitmap = thumbCache.get(path)
+        val cachedDuration = durationCache[path]
+
         when (mediaType) {
             "video" -> {
                 holder.ivPlayIcon.visibility = View.VISIBLE
                 holder.ivPlayIcon.setImageResource(android.R.drawable.ic_media_play)
-                loadVideoThumbnail(holder.ivThumbnail, holder.tvDuration, file)
             }
             "audio" -> {
                 holder.ivPlayIcon.visibility = View.VISIBLE
                 holder.ivPlayIcon.setImageResource(android.R.drawable.ic_btn_speak_now)
-                holder.ivThumbnail.setImageResource(android.R.color.darker_gray)
-                loadAudioDuration(holder.tvDuration, file)
             }
             else -> {
                 holder.ivPlayIcon.visibility = View.GONE
-                holder.tvDuration.visibility = View.GONE
-                loadImageThumbnail(holder.ivThumbnail, file)
+            }
+        }
+
+        // 先设置占位/缓存结果，避免 item 空白或显示上一条数据
+        if (cachedBitmap != null) {
+            holder.ivThumbnail.setImageBitmap(cachedBitmap)
+        } else {
+            holder.ivThumbnail.setImageResource(android.R.color.darker_gray)
+        }
+        if (cachedDuration != null) {
+            holder.tvDuration.text = cachedDuration
+            holder.tvDuration.visibility = View.VISIBLE
+        } else {
+            holder.tvDuration.visibility = if (mediaType == "image") View.GONE else View.INVISIBLE
+        }
+
+        val needBitmap = cachedBitmap == null && (mediaType == "video" || mediaType == "image")
+        val needDuration = cachedDuration == null && (mediaType == "video" || mediaType == "audio")
+        if (!needBitmap && !needDuration) return
+
+        CoroutineScope(Dispatchers.IO).launch {
+            var bitmap: Bitmap? = null
+            var duration: String? = null
+            try {
+                when (mediaType) {
+                    "video" -> {
+                        val retriever = MediaMetadataRetriever()
+                        try {
+                            retriever.setDataSource(path)
+                            if (needBitmap) bitmap = retriever.getFrameAtTime(1_000_000)
+                            if (needDuration) {
+                                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                                    ?.toLongOrNull()?.let { ms ->
+                                        val sec = ms / 1000
+                                        duration = String.format("%02d:%02d", sec / 60, sec % 60)
+                                    }
+                            }
+                        } finally { retriever.release() }
+                    }
+                    "audio" -> {
+                        val retriever = MediaMetadataRetriever()
+                        try {
+                            retriever.setDataSource(path)
+                            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                                ?.toLongOrNull()?.let { ms ->
+                                    val sec = ms / 1000
+                                    duration = String.format("%02d:%02d", sec / 60, sec % 60)
+                                }
+                        } finally { retriever.release() }
+                    }
+                    else -> {
+                        bitmap = decodeImageThumb(path)
+                    }
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "thumbnail load failed: $path")
+            }
+            bitmap?.let { thumbCache.put(path, it) }
+            duration?.let { durationCache[path] = it }
+
+            withContext(Dispatchers.Main) {
+                // holder 已被复用到其它项就不更新，避免错乱
+                if (holder.boundPath != path) return@withContext
+                bitmap?.let { holder.ivThumbnail.setImageBitmap(it) }
+                duration?.let {
+                    holder.tvDuration.text = it
+                    holder.tvDuration.visibility = View.VISIBLE
+                }
             }
         }
     }
 
-    private fun loadAudioDuration(tvDuration: TextView, file: File) {
-        try {
-            val retriever = MediaMetadataRetriever()
-            retriever.setDataSource(file.absolutePath)
-            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
-            if (durationMs != null) {
-                val totalSec = durationMs / 1000
-                tvDuration.text = String.format("%02d:%02d", totalSec / 60, totalSec % 60)
-                tvDuration.visibility = View.VISIBLE
-            } else {
-                tvDuration.visibility = View.GONE
-            }
-            retriever.release()
-        } catch (e: Exception) {
-            Timber.w(e, "Failed to read audio duration: ${file.name}")
-            tvDuration.visibility = View.GONE
-        }
-    }
-
-    private fun loadVideoThumbnail(imageView: ImageView, tvDuration: TextView, file: File) {
-        try {
-            val retriever = MediaMetadataRetriever()
-            retriever.setDataSource(file.absolutePath)
-            val bitmap = retriever.getFrameAtTime(1_000_000)
-            if (bitmap != null) imageView.setImageBitmap(bitmap)
-            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
-            if (durationMs != null) {
-                val totalSec = durationMs / 1000
-                tvDuration.text = String.format("%02d:%02d", totalSec / 60, totalSec % 60)
-                tvDuration.visibility = View.VISIBLE
-            }
-            retriever.release()
-        } catch (e: Exception) {
-            Timber.w(e, "Failed to load video thumbnail: ${file.name}")
-        }
-    }
-
-    private fun loadImageThumbnail(imageView: ImageView, file: File) {
-        try {
+    private fun decodeImageThumb(path: String): Bitmap? {
+        return try {
             val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeFile(file.absolutePath, options)
+            BitmapFactory.decodeFile(path, options)
             val targetWidth = 192
-            var sampleSize = 1
-            if (options.outWidth > targetWidth) sampleSize = options.outWidth / targetWidth
+            val sampleSize = if (options.outWidth > targetWidth) options.outWidth / targetWidth else 1
             val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
-            val bitmap = BitmapFactory.decodeFile(file.absolutePath, decodeOptions)
-            if (bitmap != null) imageView.setImageBitmap(bitmap)
+            BitmapFactory.decodeFile(path, decodeOptions)
         } catch (e: Exception) {
-            Timber.w(e, "Failed to load image thumbnail: ${file.name}")
+            Timber.w(e, "Failed to decode image thumb: $path")
+            null
         }
     }
 }
