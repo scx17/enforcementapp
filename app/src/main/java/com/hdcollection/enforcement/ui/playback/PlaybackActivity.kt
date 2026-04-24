@@ -355,6 +355,9 @@ class PlaybackActivity : AppCompatActivity() {
 
 class MediaListFragment : Fragment() {
 
+    private var mediaAdapter: MediaFileAdapter? = null
+    private var mediaFiles: List<File> = emptyList()
+
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
@@ -376,10 +379,6 @@ class MediaListFragment : Fragment() {
             else -> "image"
         }
 
-        // 更新文件数量
-        requireActivity().findViewById<TextView>(R.id.tvFileCount)?.text =
-            "${files.size} 个文件"
-
         Timber.d("PlaybackActivity: found ${files.size} files in $dirName (type=$mediaType)")
 
         val activity = requireActivity() as PlaybackActivity
@@ -395,8 +394,21 @@ class MediaListFragment : Fragment() {
             activity.uploadSingleFile(file, adapterRef, position)
         })
         recycler.adapter = adapter
-        activity.currentAdapter = adapter
-        activity.currentFiles = files
+        mediaAdapter = adapter
+        mediaFiles = files
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 切到本 fragment 时将 activity 的当前 adapter/files 指向本页，并同步顶部计数与勾选状态
+        val activity = activity as? PlaybackActivity ?: return
+        activity.currentAdapter = mediaAdapter
+        activity.currentFiles = mediaFiles
+        activity.findViewById<TextView>(R.id.tvFileCount)?.text = "${mediaFiles.size} 个文件"
+        // 切 tab 时丢弃上一页的选择，避免跨 tab 误删
+        activity.selectedFiles.clear()
+        activity.updateDeleteButtonText()
+        mediaAdapter?.notifyDataSetChanged()
     }
 
     private fun playAudio(file: File) {
