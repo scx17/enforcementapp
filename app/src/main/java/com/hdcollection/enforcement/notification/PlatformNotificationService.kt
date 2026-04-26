@@ -48,6 +48,7 @@ class PlatformNotificationService(
     var onWorkTaskReceived: ((String, String) -> Unit)? = null  // (title, priority)
     var onConfigPushReceived: ((org.json.JSONObject) -> Unit)? = null
     var onCustomCodeChanged: ((String) -> Unit)? = null
+    var onTakeSnapshotRequested: ((requestId: String) -> Unit)? = null
 
     // 无限重连状态机
     private val reconnecting = AtomicBoolean(false)
@@ -104,6 +105,17 @@ class PlatformNotificationService(
                     Timber.e(e, "PullFile 命令解析失败")
                 }
             }, String::class.java)
+
+            // 监听远程拍照命令（D2 Phase 4）
+            conn.on("TakeSnapshot", { data: org.json.JSONObject ->
+                val requestId = data.optString("requestId", "")
+                Timber.i("收到远程拍照命令: requestId=$requestId")
+                if (requestId.isNotEmpty()) {
+                    onTakeSnapshotRequested?.invoke(requestId)
+                } else {
+                    Timber.w("远程拍照命令缺 requestId，已忽略")
+                }
+            }, org.json.JSONObject::class.java)
 
             // 监听管理端强制拉取日志命令
             conn.on("PullLog", { _: String ->
