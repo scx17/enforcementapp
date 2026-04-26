@@ -21,6 +21,7 @@ import com.hdcollection.enforcement.service.LogUploadWorker
 import com.hdcollection.enforcement.service.UploadWorker
 import com.hdcollection.enforcement.service.UserOpLogUploadWorker
 import com.hdcollection.enforcement.sip.SipManager
+import com.hdcollection.enforcement.upload.SnapshotUploader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -46,6 +47,9 @@ class EnforcementApp : Application() {
         private set
 
     lateinit var fileSyncService: com.hdcollection.enforcement.sync.FileListSyncService
+        private set
+
+    lateinit var snapshotUploader: SnapshotUploader
         private set
 
     lateinit var remoteConfigManager: RemoteConfigManager
@@ -122,6 +126,8 @@ class EnforcementApp : Application() {
             .readTimeout(30, TimeUnit.SECONDS)
             .build()
         fileSyncService = com.hdcollection.enforcement.sync.FileListSyncService(this, settings, syncClient)
+        snapshotUploader = SnapshotUploader(this, settings)
+        Timber.i("SnapshotUploader 初始化完成")
         val syncTimer = java.util.Timer()
         syncTimer.scheduleAtFixedRate(object : java.util.TimerTask() {
             override fun run() {
@@ -243,7 +249,16 @@ class EnforcementApp : Application() {
             override fun run() {
                 if (settings.platformApiUrl.isEmpty() || settings.deviceId.isEmpty()) return
                 try {
-                    val json = """{"deviceId":"${settings.deviceId}"}"""
+                    val snap = com.hdcollection.enforcement.device.DeviceStatusCollector.collect(this@EnforcementApp)
+                    val jsonObj = org.json.JSONObject().apply {
+                        put("deviceId", settings.deviceId)
+                        snap.battery?.let { put("battery", it) }
+                        snap.charge?.let { put("charge", it) }
+                        snap.signal?.let { put("signal", it) }
+                        snap.networkType?.let { put("networkType", it) }
+                        snap.storageRemaining?.let { put("storageRemaining", it) }
+                    }
+                    val json = jsonObj.toString()
                     val body = okhttp3.RequestBody.create(
                         "application/json".toMediaType(), json.toByteArray()
                     )
