@@ -249,7 +249,16 @@ class EnforcementApp : Application() {
             override fun run() {
                 if (settings.platformApiUrl.isEmpty() || settings.deviceId.isEmpty()) return
                 try {
-                    val json = """{"deviceId":"${settings.deviceId}"}"""
+                    val snap = com.hdcollection.enforcement.device.DeviceStatusCollector.collect(this@EnforcementApp)
+                    val jsonObj = org.json.JSONObject().apply {
+                        put("deviceId", settings.deviceId)
+                        snap.battery?.let { put("battery", it) }
+                        snap.charge?.let { put("charge", it) }
+                        snap.signal?.let { put("signal", it) }
+                        snap.networkType?.let { put("networkType", it) }
+                        snap.storageRemaining?.let { put("storageRemaining", it) }
+                    }
+                    val json = jsonObj.toString()
                     val body = okhttp3.RequestBody.create(
                         "application/json".toMediaType(), json.toByteArray()
                     )
