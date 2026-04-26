@@ -107,15 +107,20 @@ class PlatformNotificationService(
             }, String::class.java)
 
             // 监听远程拍照命令（D2 Phase 4）
-            conn.on("TakeSnapshot", { data: org.json.JSONObject ->
-                val requestId = data.optString("requestId", "")
-                Timber.i("收到远程拍照命令: requestId=$requestId")
-                if (requestId.isNotEmpty()) {
-                    onTakeSnapshotRequested?.invoke(requestId)
-                } else {
-                    Timber.w("远程拍照命令缺 requestId，已忽略")
+            conn.on("TakeSnapshot", { data: String ->
+                Timber.i("收到远程拍照命令: $data")
+                try {
+                    val json = org.json.JSONObject(data)
+                    val requestId = json.optString("requestId", "")
+                    if (requestId.isNotEmpty()) {
+                        onTakeSnapshotRequested?.invoke(requestId)
+                    } else {
+                        Timber.w("远程拍照命令缺 requestId，已忽略")
+                    }
+                } catch (e: Exception) {
+                    Timber.w(e, "远程拍照命令 JSON 解析失败")
                 }
-            }, org.json.JSONObject::class.java)
+            }, String::class.java)
 
             // 监听管理端强制拉取日志命令
             conn.on("PullLog", { _: String ->
