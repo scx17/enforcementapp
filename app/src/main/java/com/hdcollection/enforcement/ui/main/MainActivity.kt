@@ -210,6 +210,12 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             runOnUiThread { updateDeviceInfo() }
         }
 
+        // 注册远程拍照监听（D2 Phase 4）
+        (application as EnforcementApp).notificationService.onTakeSnapshotRequested = { requestId ->
+            Timber.i("MainActivity 收到远程拍照请求: requestId=$requestId")
+            runOnUiThread { capturePhotoForRequest(requestId) }
+        }
+
         // 注册硬件按键广播接收器
         registerHardwareKeyReceiver()
 
@@ -946,6 +952,38 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             CoroutineScope(Dispatchers.IO).launch {
                 try { app.fileSyncService.syncFileList() }
                 catch (e: Exception) { Timber.w(e, "拍照后同步清单失败") }
+            }
+        }
+    }
+
+    private fun capturePhotoForRequest(requestId: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastPhotoTime < DEBOUNCE_MS) {
+            Timber.w("远程拍照被 debounce: requestId=$requestId")
+            return
+        }
+        lastPhotoTime = now
+        val dir = File(filesDir, "photos").apply { mkdirs() }
+        val file = File(dir, "remote_${requestId}_${System.currentTimeMillis()}.jpg")
+        shutterSound.play(MediaActionSound.SHUTTER_CLICK)
+        mediaService?.capturePhoto(file) { savedFile ->
+            Timber.i("远程拍照完成 requestId=$requestId file=${savedFile.name}")
+            UserOpLogger.record(
+                operationType = "RemoteTakePhoto",
+                description = "远程拍照 requestId=$requestId",
+                targetType = "photo",
+                targetId = savedFile.name
+            )
+            runOnUiThread { playVoice(R.raw.voice_photo_taken) }
+            // 直接走 SnapshotUploader 上传（不等 Pull），带 requestId 触发后端 SignalR 回推 SnapshotResult
+            val app = application as EnforcementApp
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    app.snapshotUploader.upload(savedFile, requestId)
+                    Timber.i("远程拍照已上传 requestId=$requestId")
+                } catch (e: Exception) {
+                    Timber.e(e, "远程拍照上传失败 requestId=$requestId")
+                }
             }
         }
     }
