@@ -39,6 +39,7 @@ class SipManager(private val settings: AppSettings) {
     private var sipSocket: DatagramSocket? = null
     private val scope = CoroutineScope(Dispatchers.IO)
     private var listenJob: Job? = null
+    private var keepaliveJob: Job? = null
 
     // 当前通话参数
     private var callId: String = ""
@@ -47,6 +48,11 @@ class SipManager(private val settings: AppSettings) {
     private var remoteRtpPort: Int = 0
     private var localRtpPort: Int = 20000
     private var cseq: Int = 1
+
+    // ── 反向架构 keepalive ────────────────────────
+    // 每 25 秒从 sipSocket（5070）发 "KA <deviceId>" 到后端 :5071，维持运营商 NAT 映射
+    private val backendKeepalivePort = 5071
+    private val keepaliveIntervalMs = 25_000L
 
     // ── 音频 ──────────────────────────────────────
     private val SAMPLE_RATE = 8000     // G.711 8kHz
@@ -69,9 +75,48 @@ class SipManager(private val settings: AppSettings) {
         try {
             sipSocket = DatagramSocket(5070)  // 对讲用独立端口，与 GB28181 5060 区分
             startListening()
-            Timber.i("SipManager started on port 5070")
+            startKeepalive()
+            Timber.i("SipManager started on port 5070, keepalive → backend:$backendKeepalivePort")
         } catch (e: Exception) {
             Timber.e(e, "SipManager start failed")
+        }
+    }
+
+    /**
+     * 反向架构 NAT 维持：从 sipSocket（5070）周期性发 keepalive 到后端 5071。
+     * 后端记录 (deviceId → 公网 IP:NAT 映射端口)；浏览器发起对讲时反向沿用这个端口发 INVITE。
+     */
+    private fun startKeepalive() {
+        keepaliveJob?.cancel()
+        keepaliveJob = scope.launch {
+            while (true) {
+                try {
+                    val backendHost = parseBackendHost(settings.platformApiUrl)
+                    val deviceId = settings.deviceId
+                    if (backendHost.isNotEmpty() && deviceId.isNotEmpty()) {
+                        val msg = "KA $deviceId\n".toByteArray()
+                        val pkt = DatagramPacket(
+                            msg, msg.size,
+                            InetAddress.getByName(backendHost), backendKeepalivePort
+                        )
+                        sipSocket?.send(pkt)
+                    }
+                } catch (e: Exception) {
+                    Timber.w(e, "SipManager keepalive 发送失败")
+                }
+                try { kotlinx.coroutines.delay(keepaliveIntervalMs) } catch (_: Exception) { break }
+            }
+        }
+    }
+
+    /** 从 platformApiUrl 解析后端 host（去掉 scheme + port + 路径）。*/
+    private fun parseBackendHost(url: String): String {
+        if (url.isEmpty()) return ""
+        return try {
+            val u = java.net.URI(url)
+            u.host ?: ""
+        } catch (_: Exception) {
+            url.removePrefix("https://").removePrefix("http://").substringBefore("/").substringBefore(":")
         }
     }
 
@@ -257,15 +302,18 @@ class SipManager(private val settings: AppSettings) {
     }
 
     private suspend fun sendAudioLoop(record: AudioRecord) {
-        val buf = ByteArray(BUF_SIZE)
+        // G.711 标准 20ms 一帧 = 160 samples = 320 字节 PCM = 160 字节 μ-law
+        val frameSamples = 160
+        val pcmBuf = ByteArray(frameSamples * 2) // 16-bit
         var seq = 0
         var ts = 0
         val ssrc = (Math.random() * 0xFFFFFFFFL).toInt()
         while (state == State.IN_CALL) {
-            val read = record.read(buf, 0, buf.size)
+            val read = record.read(pcmBuf, 0, pcmBuf.size)
             if (read <= 0) continue
-            val rtp = buildRtpPacket(buf, read, seq++, ts, ssrc, 0)  // PT=0 PCMU
-            ts += read / 2
+            val muLaw = G711.encodePcm16Bytes(pcmBuf, 0, read)
+            val rtp = buildRtpPacket(muLaw, muLaw.size, seq++, ts, ssrc, 0)  // PT=0 PCMU
+            ts += muLaw.size  // 8kHz mono, 1 sample/byte
             try {
                 val pkt = DatagramPacket(rtp, rtp.size,
                     InetAddress.getByName(remoteIp), remoteRtpPort)
@@ -281,8 +329,10 @@ class SipManager(private val settings: AppSettings) {
                 val pkt = DatagramPacket(buf, buf.size)
                 rtpSocket?.receive(pkt) ?: break
                 if (pkt.length > 12) {
-                    // 跳过 12 字节 RTP 头，剩余为 PCM 数据
-                    track.write(pkt.data, 12, pkt.length - 12)
+                    // 跳过 12 字节 RTP 头，剩余为 G.711 μ-law payload，解码成 PCM16 写 AudioTrack
+                    val muLen = pkt.length - 12
+                    val pcm = G711.decodeToPcm16Bytes(pkt.data, 12, muLen)
+                    track.write(pcm, 0, pcm.size)
                 }
             } catch (e: Exception) { /* ignore */ }
         }
@@ -360,6 +410,7 @@ class SipManager(private val settings: AppSettings) {
     fun stop() {
         if (state != State.IDLE) hangup()
         listenJob?.cancel()
+        keepaliveJob?.cancel()
         sipSocket?.close()
         Timber.i("SipManager stopped")
     }
