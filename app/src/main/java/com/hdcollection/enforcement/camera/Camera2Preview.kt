@@ -187,10 +187,31 @@ class Camera2Preview(private val context: Context) {
         }
     }
 
+    private var currentPhotoSize: Size = Size(1920, 1080)
+
+    private fun resolvePhotoSize(): Size {
+        val app = context.applicationContext as? com.hdcollection.enforcement.EnforcementApp
+        val resStr = app?.remoteConfigManager?.config?.value?.photoResolution ?: "1920x1080"
+        return try {
+            val (w, h) = resStr.split("x", "X").let { it[0].toInt() to it[1].toInt() }
+            Size(w, h)
+        } catch (_: Exception) {
+            Size(1920, 1080)
+        }
+    }
+
     private fun ensureImageReader() {
+        val target = resolvePhotoSize()
+        // 配置变化：分辨率不一致时销毁旧 reader 让本方法重建
+        if (imageReader != null && (target.width != currentPhotoSize.width || target.height != currentPhotoSize.height)) {
+            Timber.i("ImageReader 尺寸变化 ${currentPhotoSize.width}x${currentPhotoSize.height} → ${target.width}x${target.height}, 重建")
+            try { imageReader?.close() } catch (_: Exception) {}
+            imageReader = null
+        }
         if (imageReader != null) return
-        Timber.i("ImageReader 初始化: 1920x1080, JPEG, maxImages=2")
-        imageReader = ImageReader.newInstance(1920, 1080, ImageFormat.JPEG, 2).also {
+        currentPhotoSize = target
+        Timber.i("ImageReader 初始化: ${target.width}x${target.height}, JPEG, maxImages=2")
+        imageReader = ImageReader.newInstance(target.width, target.height, ImageFormat.JPEG, 2).also {
             it.setOnImageAvailableListener({ reader ->
                 val image: Image? = reader.acquireLatestImage()
                 image?.let { img ->
@@ -500,6 +521,42 @@ class Camera2Preview(private val context: Context) {
         try { audioMediaCodec?.apply { stop(); release() } } catch (_: Exception) {}
         audioMediaCodec = null
         Timber.i("音频编码已停止")
+    }
+
+    /**
+     * 远程配置变更后热应用视频编码参数。
+     * 仅当正在推流时才会重启编码器；分辨率/码率/帧率任一不一致就重启。
+     * 拍照分辨率变化通过 [ensureImageReader] 在下次拍照前自动重建，无需走这里。
+     */
+    fun applyVideoConfigIfChanged() {
+        if (!isEncoding) return
+        val (newW, newH, newFps) = resolveVideoParams()
+        val newBitrateBps = resolveVideoBitrateBps()
+        val mc = mediaCodec
+        if (mc != null) {
+            try {
+                val cur = mc.outputFormat
+                val curW = cur.getInteger(MediaFormat.KEY_WIDTH)
+                val curH = cur.getInteger(MediaFormat.KEY_HEIGHT)
+                val curFps = if (cur.containsKey(MediaFormat.KEY_FRAME_RATE)) cur.getInteger(MediaFormat.KEY_FRAME_RATE) else newFps
+                val curBr = if (cur.containsKey(MediaFormat.KEY_BIT_RATE)) cur.getInteger(MediaFormat.KEY_BIT_RATE) else newBitrateBps
+                if (curW == newW && curH == newH && curFps == newFps && curBr == newBitrateBps) {
+                    return
+                }
+                Timber.i("视频参数变化, 热重启编码器: ${curW}x${curH}@${curFps}fps/${curBr/1000}kbps → ${newW}x${newH}@${newFps}fps/${newBitrateBps/1000}kbps")
+            } catch (_: Exception) {
+                Timber.i("视频参数变化, 热重启编码器（旧参数读取失败）: 目标 ${newW}x${newH}@${newFps}fps/${newBitrateBps/1000}kbps")
+            }
+        }
+        val ip = currentRtpIp
+        val port = currentRtpPort
+        val ssrc = currentSsrc
+        if (ip.isNullOrEmpty() || port == 0) {
+            Timber.w("热重启编码器跳过：RTP 目标缺失")
+            return
+        }
+        stopEncoding()
+        startEncoding(ip, port, ssrc)
     }
 
     fun stopEncoding() {

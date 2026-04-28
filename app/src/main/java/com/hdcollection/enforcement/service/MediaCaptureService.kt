@@ -19,11 +19,18 @@ import android.net.NetworkRequest
 import android.view.SurfaceView
 import androidx.core.app.NotificationCompat
 import com.hdcollection.enforcement.R
+import com.hdcollection.enforcement.EnforcementApp
 import com.hdcollection.enforcement.camera.Camera2Preview
 import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.gb28181.GB28181Manager
 import com.hdcollection.enforcement.gb28181.StreamCallback
 import com.hdcollection.enforcement.ui.main.MainActivity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import timber.log.Timber
 import java.io.File
 
@@ -49,6 +56,9 @@ class MediaCaptureService : Service(), StreamCallback {
     private var wakeLock: PowerManager.WakeLock? = null
     private val listeners = java.util.concurrent.CopyOnWriteArrayList<Listener>()
 
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var configCollectJob: Job? = null
+
     fun addListener(l: Listener) { listeners.add(l) }
     fun removeListener(l: Listener) { listeners.remove(l) }
 
@@ -65,6 +75,27 @@ class MediaCaptureService : Service(), StreamCallback {
         startForegroundWithNotification()
         camera = Camera2Preview(this).also { it.start() }
         Timber.i("Camera2Preview 已在 Service 内启动")
+
+        // 远程配置变更时热应用视频参数（分辨率/码率/帧率/拍照分辨率），无需重启 App
+        val app = applicationContext as? EnforcementApp
+        if (app != null) {
+            configCollectJob = serviceScope.launch {
+                var lastSig = videoConfigSignature(app)
+                app.remoteConfigManager.config.collect {
+                    val sig = videoConfigSignature(app)
+                    if (sig != lastSig) {
+                        Timber.i("RemoteConfig 视频参数变化: $lastSig → $sig")
+                        lastSig = sig
+                        try {
+                            camera?.applyVideoConfigIfChanged()
+                        } catch (e: Exception) {
+                            Timber.e(e, "applyVideoConfigIfChanged 异常")
+                        }
+                    }
+                }
+            }
+        }
+
         gb28181Manager = GB28181Manager(settings, this).also { it.register() }
         registerGbNetworkCallback()
         Timber.i("GB28181Manager 已在 Service 内启动")
@@ -111,6 +142,9 @@ class MediaCaptureService : Service(), StreamCallback {
 
     override fun onDestroy() {
         Timber.i("MediaCaptureService onDestroy")
+        configCollectJob?.cancel()
+        configCollectJob = null
+        serviceScope.cancel()
         unregisterGbNetworkCallback()
         gb28181Manager?.unregister()
         gb28181Manager?.destroy()
@@ -122,6 +156,12 @@ class MediaCaptureService : Service(), StreamCallback {
         wakeLock = null
         Timber.i("Service WakeLock released")
         super.onDestroy()
+    }
+
+    /** 视频参数指纹：分辨率+帧率+码率+拍照分辨率/质量；任一变化触发热应用。*/
+    private fun videoConfigSignature(app: EnforcementApp): String {
+        val c = app.remoteConfigManager.config.value
+        return "${c.videoResolution}@${c.videoFps}/${c.videoBitrateKbps}|photo=${c.photoResolution}/${c.photoQuality}"
     }
 
     // —— StreamCallback 实现（GB28181 INVITE/BYE/注册回调）——

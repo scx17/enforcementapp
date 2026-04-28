@@ -28,6 +28,12 @@ data class RemoteConfig(
     val videoResolution: String = "1280x720",
     val videoFps: Int = 25,
     val videoBitrateKbps: Int = 1500,
+    // photo
+    val photoResolution: String = "1920x1080",
+    val photoQuality: Int = 85,
+    // patrol
+    val patrolEnabled: Boolean = false,
+    val patrolIntervalSeconds: Int = 300,
     // audio
     val audioEnabled: Boolean = true,
     // gps
@@ -118,6 +124,14 @@ class RemoteConfigManager(
                     videoFps = sec.optInt("fps", next.videoFps),
                     videoBitrateKbps = sec.optInt("bitrate", next.videoBitrateKbps)
                 )
+                "photo" -> next = next.copy(
+                    photoResolution = sec.optString("resolution", next.photoResolution),
+                    photoQuality = sec.optInt("quality", next.photoQuality)
+                )
+                "patrol" -> next = next.copy(
+                    patrolEnabled = sec.optBoolean("enabled", next.patrolEnabled),
+                    patrolIntervalSeconds = sec.optInt("intervalSeconds", next.patrolIntervalSeconds)
+                )
                 "audio" -> next = next.copy(
                     audioEnabled = sec.optBoolean("enabled", next.audioEnabled)
                 )
@@ -156,6 +170,10 @@ class RemoteConfigManager(
             putString("videoResolution", c.videoResolution)
             putInt("videoFps", c.videoFps)
             putInt("videoBitrateKbps", c.videoBitrateKbps)
+            putString("photoResolution", c.photoResolution)
+            putInt("photoQuality", c.photoQuality)
+            putBoolean("patrolEnabled", c.patrolEnabled)
+            putInt("patrolIntervalSeconds", c.patrolIntervalSeconds)
             putBoolean("audioEnabled", c.audioEnabled)
             putBoolean("gpsEnabled", c.gpsEnabled)
             putInt("gpsIntervalSeconds", c.gpsIntervalSeconds)
@@ -182,6 +200,10 @@ class RemoteConfigManager(
             videoResolution = prefs.getString("videoResolution", def.videoResolution) ?: def.videoResolution,
             videoFps = prefs.getInt("videoFps", def.videoFps),
             videoBitrateKbps = prefs.getInt("videoBitrateKbps", def.videoBitrateKbps),
+            photoResolution = prefs.getString("photoResolution", def.photoResolution) ?: def.photoResolution,
+            photoQuality = prefs.getInt("photoQuality", def.photoQuality),
+            patrolEnabled = prefs.getBoolean("patrolEnabled", def.patrolEnabled),
+            patrolIntervalSeconds = prefs.getInt("patrolIntervalSeconds", def.patrolIntervalSeconds),
             audioEnabled = prefs.getBoolean("audioEnabled", def.audioEnabled),
             gpsEnabled = prefs.getBoolean("gpsEnabled", def.gpsEnabled),
             gpsIntervalSeconds = prefs.getInt("gpsIntervalSeconds", def.gpsIntervalSeconds),
