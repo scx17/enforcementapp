@@ -4,16 +4,20 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#000000">
+    android:background="@color/surface_bg">
 
-    <!-- 信息栏 -->
+    <!-- 信息栏（顶部） -->
     <LinearLayout
         android:id="@+id/infoBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:padding="4dp"
-        android:background="#CC1A237E"
+        android:paddingStart="@dimen/space_md"
+        android:paddingEnd="@dimen/space_md"
+        android:paddingTop="@dimen/space_sm"
+        android:paddingBottom="@dimen/space_sm"
+        android:background="@color/surface_overlay"
+        android:gravity="center_vertical"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
@@ -22,20 +26,20 @@
             android:id="@+id/tvStorage"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textColor="#FFFFFF"
-            android:textSize="12sp"
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/font_sm"
             android:text="--" />
 
         <Space
-            android:layout_width="8dp"
+            android:layout_width="@dimen/space_md"
             android:layout_height="1dp" />
 
         <TextView
             android:id="@+id/tvBattery"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textColor="#FFFFFF"
-            android:textSize="12sp"
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/font_sm"
             android:text="--" />
 
         <Space
@@ -47,20 +51,20 @@
             android:id="@+id/tvDate"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textColor="#FFFFFF"
-            android:textSize="12sp"
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/font_sm"
             android:text="--" />
 
         <Space
-            android:layout_width="8dp"
+            android:layout_width="@dimen/space_md"
             android:layout_height="1dp" />
 
         <TextView
             android:id="@+id/tvEncoding"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textColor="#FFFFFF"
-            android:textSize="12sp"
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/font_sm"
             android:text="H264 1080P" />
 
     </LinearLayout>
@@ -78,63 +82,71 @@
     <!-- 切换摄像头按钮（预览区右上角） -->
     <ImageButton
         android:id="@+id/btnSwitchCamera"
-        android:layout_width="44dp"
-        android:layout_height="44dp"
-        android:layout_margin="12dp"
+        android:layout_width="@dimen/touch_min"
+        android:layout_height="@dimen/touch_min"
+        android:layout_margin="@dimen/space_md"
         android:src="@android:drawable/ic_menu_camera"
-        android:background="#66000000"
+        android:background="#80000000"
         android:scaleType="centerInside"
-        android:padding="8dp"
+        android:padding="@dimen/space_md"
         android:contentDescription="切换摄像头"
         app:layout_constraintTop_toBottomOf="@id/infoBar"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <!-- 推流状态覆盖层（叠加在预览区左上角） -->
+    <!-- 推流状态覆盖层（预览区左上角） -->
     <TextView
         android:id="@+id/tvStreamStatus"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:padding="4dp"
-        android:textColor="#FFFFFF"
-        android:textSize="12sp"
-        android:background="#80000000"
+        android:paddingStart="@dimen/space_md"
+        android:paddingEnd="@dimen/space_md"
+        android:paddingTop="@dimen/space_xs"
+        android:paddingBottom="@dimen/space_xs"
+        android:textColor="@color/text_primary"
+        android:textSize="@dimen/font_sm"
+        android:textStyle="bold"
+        android:background="#B3000000"
         android:text="● 初始化"
-        android:layout_margin="8dp"
+        android:layout_margin="@dimen/space_sm"
         app:layout_constraintTop_toBottomOf="@id/infoBar"
         app:layout_constraintStart_toStartOf="parent" />
 
-    <!-- 录像指示器（叠加在预览区右上角） -->
+    <!-- 录像指示器（预览区右上角，对齐切换镜头按钮下方） -->
     <TextView
         android:id="@+id/tvRecordingIndicator"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:padding="6dp"
-        android:textColor="#FF0000"
-        android:textSize="14sp"
+        android:paddingStart="@dimen/space_md"
+        android:paddingEnd="@dimen/space_md"
+        android:paddingTop="@dimen/space_xs"
+        android:paddingBottom="@dimen/space_xs"
+        android:textColor="@color/status_recording"
+        android:textSize="@dimen/font_md"
         android:textStyle="bold"
-        android:background="#80000000"
+        android:background="#B3000000"
         android:text="● REC 00:00"
         android:visibility="gone"
-        android:layout_margin="8dp"
-        app:layout_constraintTop_toBottomOf="@id/infoBar"
+        android:layout_marginEnd="@dimen/space_sm"
+        android:layout_marginTop="@dimen/space_sm"
+        app:layout_constraintTop_toBottomOf="@id/btnSwitchCamera"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <!-- 音频录制指示器（屏幕顶部醒目横幅，替换原录像指示器下方小标签） -->
+    <!-- 音频录制指示器（屏幕顶部醒目横幅） -->
     <TextView
         android:id="@+id/tvAudioRecordingIndicator"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:paddingStart="20dp"
-        android:paddingEnd="20dp"
-        android:paddingTop="10dp"
-        android:paddingBottom="10dp"
-        android:textColor="#FFFFFFFF"
-        android:textSize="22sp"
+        android:paddingStart="@dimen/space_xl"
+        android:paddingEnd="@dimen/space_xl"
+        android:paddingTop="@dimen/space_md"
+        android:paddingBottom="@dimen/space_md"
+        android:textColor="@color/text_primary"
+        android:textSize="@dimen/font_xxl"
         android:textStyle="bold"
         android:background="@drawable/bg_audio_indicator"
         android:text="🎙 录音中 00:00"
         android:visibility="gone"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="@dimen/space_lg"
         app:layout_constraintTop_toBottomOf="@id/infoBar"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
@@ -145,8 +157,12 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:padding="4dp"
-        android:background="#CC1A237E"
+        android:paddingStart="@dimen/space_md"
+        android:paddingEnd="@dimen/space_md"
+        android:paddingTop="@dimen/space_sm"
+        android:paddingBottom="@dimen/space_sm"
+        android:background="@color/surface_overlay"
+        android:gravity="center_vertical"
         app:layout_constraintBottom_toTopOf="@id/bottomBar"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
@@ -155,8 +171,8 @@
             android:id="@+id/tvGps"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textColor="#FFFFFF"
-            android:textSize="10sp"
+            android:textColor="@color/text_secondary"
+            android:textSize="@dimen/font_sm"
             android:text="GPS: --" />
 
         <Space
@@ -168,31 +184,31 @@
             android:id="@+id/tvDeviceId"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textColor="#FFFFFF"
-            android:textSize="10sp"
+            android:textColor="@color/text_secondary"
+            android:textSize="@dimen/font_sm"
             android:text="--" />
 
         <Space
-            android:layout_width="8dp"
+            android:layout_width="@dimen/space_md"
             android:layout_height="1dp" />
 
         <TextView
             android:id="@+id/tvTime"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textColor="#FFFFFF"
-            android:textSize="10sp"
+            android:textColor="@color/text_secondary"
+            android:textSize="@dimen/font_sm"
             android:text="--" />
 
     </LinearLayout>
 
-    <!-- 底部4键 -->
+    <!-- 底部 4 键 -->
     <LinearLayout
         android:id="@+id/bottomBar"
         android:layout_width="match_parent"
-        android:layout_height="56dp"
+        android:layout_height="@dimen/bottombar_height"
         android:orientation="horizontal"
-        android:background="#CC1A237E"
+        android:background="@color/surface_overlay"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
@@ -204,6 +220,8 @@
             android:layout_weight="1"
             android:src="@drawable/ic_settings"
             android:background="?attr/selectableItemBackground"
+            android:scaleType="centerInside"
+            android:padding="@dimen/space_md"
             android:contentDescription="设置" />
 
         <ImageButton
@@ -213,6 +231,8 @@
             android:layout_weight="1"
             android:src="@drawable/ic_light"
             android:background="?attr/selectableItemBackground"
+            android:scaleType="centerInside"
+            android:padding="@dimen/space_md"
             android:contentDescription="灯光" />
 
         <ImageButton
@@ -222,6 +242,8 @@
             android:layout_weight="1"
             android:src="@drawable/ic_playback"
             android:background="?attr/selectableItemBackground"
+            android:scaleType="centerInside"
+            android:padding="@dimen/space_md"
             android:contentDescription="回放" />
 
         <ImageButton
@@ -231,6 +253,8 @@
             android:layout_weight="1"
             android:src="@drawable/ic_function"
             android:background="?attr/selectableItemBackground"
+            android:scaleType="centerInside"
+            android:padding="@dimen/space_md"
             android:contentDescription="功能" />
 
     </LinearLayout>
