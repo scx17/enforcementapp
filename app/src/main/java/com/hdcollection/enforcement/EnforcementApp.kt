@@ -278,10 +278,11 @@ class EnforcementApp : Application() {
                             if (cnt == 3) notificationService.triggerReconnect()
                         }
                     }
-                } catch (e: Exception) {
+                } catch (t: Throwable) {
+                    // 用 Throwable 兜底：Timer 线程上的未捕获 Error（如 NoSuchMethodError）
+                    // 会让整个进程崩溃，必须在此拦截。
                     val cnt = heartbeatFailCount.incrementAndGet()
-                    Timber.w("心跳异常: ${e.message}, 连续失败 $cnt 次")
-                    // 连续失败 3 次（约 45 秒）强制 SignalR 走一次重连，避免双链路都哑
+                    Timber.w(t, "心跳异常: ${t.message}, 连续失败 $cnt 次")
                     if (cnt == 3) {
                         Timber.e("心跳连续失败 3 次，触发 SignalR 立即重连")
                         notificationService.triggerReconnect()

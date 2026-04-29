@@ -6,6 +6,7 @@ import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.BatteryManager
+import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import android.telephony.TelephonyManager
@@ -37,7 +38,7 @@ object DeviceStatusCollector {
     private fun readBattery(ctx: Context): Int? = try {
         val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).takeIf { it in 0..100 }
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
         Timber.w(e, "readBattery 失败"); null
     }
 
@@ -46,7 +47,7 @@ object DeviceStatusCollector {
         val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
         if (status == BatteryManager.BATTERY_STATUS_CHARGING ||
             status == BatteryManager.BATTERY_STATUS_FULL) 1 else 0
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
         Timber.w(e, "readChargeState 失败"); null
     }
 
@@ -60,7 +61,7 @@ object DeviceStatusCollector {
                 cap.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> readCellularGeneration(ctx)
                 else -> "NONE"
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Timber.w(e, "readNetworkType 失败"); null
         }
     }
@@ -78,7 +79,7 @@ object DeviceStatusCollector {
                 TelephonyManager.NETWORK_TYPE_EDGE, TelephonyManager.NETWORK_TYPE_GPRS -> "2G"
                 else -> "CELL"
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             "CELL"
         }
     }
@@ -91,18 +92,22 @@ object DeviceStatusCollector {
                     as android.net.wifi.WifiManager
                 android.net.wifi.WifiManager.calculateSignalLevel(wm.connectionInfo.rssi, 6).coerceIn(0, 5)
             } else {
+                // TelephonyManager.getSignalStrength() 是 Android 9 (API 28) 才加的方法，
+                // 老设备（如 BT280T / Android 7.1）调用会抛 NoSuchMethodError。
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
                 val tm = ctx.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
                 tm.signalStrength?.level?.coerceIn(0, 5)
             }
-        } catch (e: Exception) {
-            Timber.w(e, "readSignalLevel 失败"); null
+        } catch (t: Throwable) {
+            // 用 Throwable 兜底：NoSuchMethodError / LinkageError 等不是 Exception 子类。
+            Timber.w(t, "readSignalLevel 失败"); null
         }
     }
 
     private fun readStorageRemaining(): Long? = try {
         val stat = StatFs(Environment.getDataDirectory().path)
         stat.availableBytes
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
         Timber.w(e, "readStorageRemaining 失败"); null
     }
 }
