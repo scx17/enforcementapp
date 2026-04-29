@@ -6,6 +6,7 @@ import android.provider.Settings
 import android.view.*
 import android.widget.Toast
 import androidx.fragment.app.Fragment
+import com.hdcollection.enforcement.BuildConfig
 import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.databinding.FragmentSettingsSystemBinding
 
@@ -40,6 +41,8 @@ class SystemSettingsFragment : Fragment() {
         binding.btnLocation.setOnClickListener { startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
         binding.btnAbout.setOnClickListener { startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) }
         binding.btnAllSettings.setOnClickListener { startActivity(Intent(Settings.ACTION_SETTINGS)) }
+
+        binding.tvAppVersion.text = "应用版本：v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
     }
 
     override fun onDestroyView() { super.onDestroyView(); _binding = null }

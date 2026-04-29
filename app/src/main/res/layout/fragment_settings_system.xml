@@ -58,5 +58,14 @@
         <Button android:id="@+id/btnAllSettings" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:text="全部系统设置" android:backgroundTint="#1A237E" android:textColor="#FFFFFF"
             android:layout_marginBottom="8dp" />
+
+        <View android:layout_width="match_parent" android:layout_height="1dp"
+            android:background="#333355" android:layout_marginTop="16dp" android:layout_marginBottom="12dp" />
+
+        <TextView android:id="@+id/tvAppVersion"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:textColor="#888888" android:textSize="12sp"
+            android:gravity="center"
+            android:text="应用版本：v-" />
     </LinearLayout>
 </ScrollView>
