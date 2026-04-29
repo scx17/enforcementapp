@@ -2,6 +2,7 @@ package com.hdcollection.enforcement.ui.function
 
 import android.content.Intent
 import android.os.Bundle
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -27,6 +28,9 @@ class FunctionActivity : AppCompatActivity() {
         setContentView(R.layout.activity_function)
 
         settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
+
+        // 返回按钮（设备无 Home 键，必须有显式返回）
+        findViewById<ImageButton>(R.id.btnBack).setOnClickListener { finish() }
 
         // 集群对讲 —— 呼叫指挥中心 SIP URI
         findViewById<LinearLayout>(R.id.btnGroupIntercom).setOnClickListener {

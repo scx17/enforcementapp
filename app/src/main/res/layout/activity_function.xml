@@ -1,125 +1,174 @@
 <?xml version="1.0" encoding="utf-8"?>
-<GridLayout
+<LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#000000"
-    android:columnCount="2"
-    android:rowCount="4"
-    android:padding="16dp">
+    android:orientation="vertical"
+    android:background="@color/surface_bg">
 
-    <!-- 集群对讲 -->
+    <!-- 顶部标题栏 -->
     <LinearLayout
-        android:id="@+id/btnGroupIntercom"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:background="?attr/selectableItemBackground"
-        android:padding="8dp">
-        <TextView android:layout_width="48dp" android:layout_height="48dp"
-            android:gravity="center" android:textSize="28sp" android:text="🎙"
-            android:background="#1A237E" />
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="集群对讲" android:textColor="#FFFFFF" android:textSize="13sp"
-            android:layout_marginTop="6dp" />
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/toolbar_height"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@color/surface_card"
+        android:paddingStart="@dimen/space_lg"
+        android:paddingEnd="@dimen/space_lg"
+        android:elevation="@dimen/elev_card">
+
+        <ImageButton
+            android:id="@+id/btnBack"
+            android:layout_width="@dimen/touch_min"
+            android:layout_height="@dimen/touch_min"
+            android:layout_marginStart="-12dp"
+            android:src="@android:drawable/ic_menu_revert"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:scaleType="centerInside"
+            android:padding="@dimen/space_md"
+            android:contentDescription="返回" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="@dimen/space_md"
+            android:text="功能菜单"
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/font_xl"
+            android:textStyle="bold" />
+
     </LinearLayout>
 
-    <!-- 运行日志 -->
-    <LinearLayout
-        android:id="@+id/btnRunLog"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:background="?attr/selectableItemBackground"
-        android:padding="8dp">
-        <TextView android:layout_width="48dp" android:layout_height="48dp"
-            android:gravity="center" android:textSize="28sp" android:text="📋"
-            android:background="#1A237E" />
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="运行日志" android:textColor="#FFFFFF" android:textSize="13sp"
-            android:layout_marginTop="6dp" />
-    </LinearLayout>
+    <!-- 功能网格 -->
+    <GridLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:columnCount="2"
+        android:rowCount="4"
+        android:padding="@dimen/space_md"
+        android:useDefaultMargins="false">
 
-    <!-- 平台通知 -->
-    <LinearLayout
-        android:id="@+id/btnNotification"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:background="?attr/selectableItemBackground"
-        android:padding="8dp">
-        <TextView android:layout_width="48dp" android:layout_height="48dp"
-            android:gravity="center" android:textSize="28sp" android:text="🔔"
-            android:background="#1A237E" />
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="平台通知" android:textColor="#FFFFFF" android:textSize="13sp"
-            android:layout_marginTop="6dp" />
-    </LinearLayout>
+        <!-- 集群对讲 -->
+        <LinearLayout
+            android:id="@+id/btnGroupIntercom"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_columnWeight="1"
+            android:layout_rowWeight="1"
+            android:layout_margin="@dimen/space_sm"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:background="@drawable/bg_function_tile"
+            android:padding="@dimen/space_md">
+            <TextView android:layout_width="56dp" android:layout_height="56dp"
+                android:gravity="center" android:textSize="@dimen/font_xxl" android:text="🎙" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="集群对讲" android:textColor="@color/text_primary"
+                android:textSize="@dimen/font_md"
+                android:layout_marginTop="@dimen/space_sm" />
+        </LinearLayout>
 
-    <!-- 单独拍照 -->
-    <LinearLayout
-        android:id="@+id/btnPhoto"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:background="?attr/selectableItemBackground"
-        android:padding="8dp">
-        <TextView android:layout_width="48dp" android:layout_height="48dp"
-            android:gravity="center" android:textSize="28sp" android:text="📷"
-            android:background="#1A237E" />
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="单独拍照" android:textColor="#FFFFFF" android:textSize="13sp"
-            android:layout_marginTop="6dp" />
-    </LinearLayout>
+        <!-- 运行日志 -->
+        <LinearLayout
+            android:id="@+id/btnRunLog"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_columnWeight="1"
+            android:layout_rowWeight="1"
+            android:layout_margin="@dimen/space_sm"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:background="@drawable/bg_function_tile"
+            android:padding="@dimen/space_md">
+            <TextView android:layout_width="56dp" android:layout_height="56dp"
+                android:gravity="center" android:textSize="@dimen/font_xxl" android:text="📋" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="运行日志" android:textColor="@color/text_primary"
+                android:textSize="@dimen/font_md"
+                android:layout_marginTop="@dimen/space_sm" />
+        </LinearLayout>
 
-    <!-- 灯光控制 -->
-    <LinearLayout
-        android:id="@+id/btnLightControl"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:background="?attr/selectableItemBackground"
-        android:padding="8dp">
-        <TextView android:layout_width="48dp" android:layout_height="48dp"
-            android:gravity="center" android:textSize="28sp" android:text="💡"
-            android:background="#1A237E" />
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="灯光控制" android:textColor="#FFFFFF" android:textSize="13sp"
-            android:layout_marginTop="6dp" />
-    </LinearLayout>
+        <!-- 平台通知 -->
+        <LinearLayout
+            android:id="@+id/btnNotification"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_columnWeight="1"
+            android:layout_rowWeight="1"
+            android:layout_margin="@dimen/space_sm"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:background="@drawable/bg_function_tile"
+            android:padding="@dimen/space_md">
+            <TextView android:layout_width="56dp" android:layout_height="56dp"
+                android:gravity="center" android:textSize="@dimen/font_xxl" android:text="🔔" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="平台通知" android:textColor="@color/text_primary"
+                android:textSize="@dimen/font_md"
+                android:layout_marginTop="@dimen/space_sm" />
+        </LinearLayout>
 
-    <!-- 作业工单 -->
-    <LinearLayout
-        android:id="@+id/btnWorkTask"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:background="?attr/selectableItemBackground"
-        android:padding="8dp">
-        <TextView android:layout_width="48dp" android:layout_height="48dp"
-            android:gravity="center" android:textSize="28sp" android:text="📝"
-            android:background="#1A237E" />
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="作业工单" android:textColor="#FFFFFF" android:textSize="13sp"
-            android:layout_marginTop="6dp" />
-    </LinearLayout>
+        <!-- 单独拍照 -->
+        <LinearLayout
+            android:id="@+id/btnPhoto"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_columnWeight="1"
+            android:layout_rowWeight="1"
+            android:layout_margin="@dimen/space_sm"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:background="@drawable/bg_function_tile"
+            android:padding="@dimen/space_md">
+            <TextView android:layout_width="56dp" android:layout_height="56dp"
+                android:gravity="center" android:textSize="@dimen/font_xxl" android:text="📷" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="单独拍照" android:textColor="@color/text_primary"
+                android:textSize="@dimen/font_md"
+                android:layout_marginTop="@dimen/space_sm" />
+        </LinearLayout>
 
-</GridLayout>
+        <!-- 灯光控制 -->
+        <LinearLayout
+            android:id="@+id/btnLightControl"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_columnWeight="1"
+            android:layout_rowWeight="1"
+            android:layout_margin="@dimen/space_sm"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:background="@drawable/bg_function_tile"
+            android:padding="@dimen/space_md">
+            <TextView android:layout_width="56dp" android:layout_height="56dp"
+                android:gravity="center" android:textSize="@dimen/font_xxl" android:text="💡" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="灯光控制" android:textColor="@color/text_primary"
+                android:textSize="@dimen/font_md"
+                android:layout_marginTop="@dimen/space_sm" />
+        </LinearLayout>
+
+        <!-- 作业工单 -->
+        <LinearLayout
+            android:id="@+id/btnWorkTask"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_columnWeight="1"
+            android:layout_rowWeight="1"
+            android:layout_margin="@dimen/space_sm"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:background="@drawable/bg_function_tile"
+            android:padding="@dimen/space_md">
+            <TextView android:layout_width="56dp" android:layout_height="56dp"
+                android:gravity="center" android:textSize="@dimen/font_xxl" android:text="📝" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="作业工单" android:textColor="@color/text_primary"
+                android:textSize="@dimen/font_md"
+                android:layout_marginTop="@dimen/space_sm" />
+        </LinearLayout>
+
+    </GridLayout>
+
+</LinearLayout>
