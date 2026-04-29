@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import android.content.pm.PackageManager
 import android.os.Build
 import android.graphics.Color
@@ -178,6 +179,13 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         } else {
             // 已有编号 → 静默同步（处理管理员改名）
             syncCustomCodeFromPlatform()
+        }
+
+        // 检测脏 sipDeviceId 自愈：早期 IMEI=0 fallback 生成的 ID（末 7 位全相同）
+        // 会导致多设备塌缩到同一记录。检测到后用 ANDROID_ID 重新申请稳定 ID。
+        if (com.hdcollection.enforcement.util.DeviceIdentity.isSipDeviceIdDirty(settings.deviceId)) {
+            Timber.w("检测到脏 sipDeviceId=${settings.deviceId}，触发自动重配置")
+            healDirtySipDeviceId()
         }
 
         // 预加载快门音
@@ -1133,6 +1141,81 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
                 }
             } catch (e: Exception) {
                 Timber.w(e, "同步 customCode 失败（网络异常）")
+            }
+        }.start()
+    }
+
+    /**
+     * 脏 sipDeviceId 自愈：用稳定 IMEI（ANDROID_ID 或 UUID）调用 /api/device/config
+     * 重新申请新 sipDeviceId，写入 settings 并重启 SIP 注册。
+     *
+     * 触发条件：settings.deviceId 末 7 位全相同字符（早期 IMEI=0 的塌缩产物）。
+     */
+    private fun healDirtySipDeviceId() {
+        val apiUrl = settings.platformApiUrl.trimEnd('/')
+        val customCode = settings.customCode
+        if (apiUrl.isEmpty() || customCode.isBlank()) {
+            Timber.w("自愈跳过: apiUrl 或 customCode 为空")
+            return
+        }
+        Thread {
+            try {
+                val imei = com.hdcollection.enforcement.util.DeviceIdentity.getStableImei(this)
+                Timber.i("自愈: 使用稳定 IMEI=$imei, customCode=$customCode 重新配置")
+
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+                val body = okhttp3.RequestBody.create(
+                    "application/json".toMediaTypeOrNull(),
+                    """{"customCode":"$customCode","imei":"$imei"}"""
+                )
+                val request = okhttp3.Request.Builder()
+                    .url("$apiUrl/api/device/config")
+                    .post(body)
+                    .build()
+                val response = client.newCall(request).execute()
+                val json = response.body?.string() ?: ""
+                val root = com.google.gson.JsonParser.parseString(json).asJsonObject
+                if (root.get("success")?.asBoolean != true) {
+                    Timber.w("自愈失败: ${root.get("message")?.asString ?: json}")
+                    return@Thread
+                }
+
+                val data = root.getAsJsonObject("data")
+                val newSipDeviceId = data.get("sipDeviceId").asString
+                val sipServer = data.get("sipServer").asString
+                val sipPort = data.get("sipPort").asString
+                val sipPassword = data.get("sipPassword").asString
+
+                val oldId = settings.deviceId
+                if (newSipDeviceId == oldId) {
+                    Timber.w("自愈: 后端返回相同 sipDeviceId=$oldId（说明后端尚未支持脏 IMEI 拒绝）")
+                    return@Thread
+                }
+
+                Timber.i("自愈成功: $oldId → $newSipDeviceId")
+                settings.sipServer = sipServer
+                settings.sipPort = sipPort
+                settings.sipUsername = newSipDeviceId
+                settings.sipPassword = sipPassword
+                settings.deviceId = newSipDeviceId
+
+                // 触发 MediaCaptureService 用新 deviceId 重新注册 GB28181
+                runOnUiThread {
+                    Toast.makeText(this, "设备 ID 已更新，正在重新注册...", Toast.LENGTH_LONG).show()
+                    updateDeviceInfo()
+                    val reloadIntent = Intent(
+                        this,
+                        com.hdcollection.enforcement.service.MediaCaptureService::class.java
+                    ).apply {
+                        action = com.hdcollection.enforcement.service.MediaCaptureService.ACTION_RELOAD_GB28181
+                    }
+                    startService(reloadIntent)
+                }
+            } catch (t: Throwable) {
+                Timber.w(t, "自愈失败（异常）")
             }
         }.start()
     }
