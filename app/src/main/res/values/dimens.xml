@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- =========================================================
+         执法仪 App · 尺寸 token
+         设计原则：48dp 触控下限（戴手套）；字号下限 14sp（户外）。
+         ========================================================= -->
+
+    <!-- 触控目标 -->
+    <dimen name="touch_min">48dp</dimen>
+    <dimen name="touch_lg">56dp</dimen>
+
+    <!-- 间距阶梯（4/8 倍数） -->
+    <dimen name="space_xs">4dp</dimen>
+    <dimen name="space_sm">8dp</dimen>
+    <dimen name="space_md">12dp</dimen>
+    <dimen name="space_lg">16dp</dimen>
+    <dimen name="space_xl">24dp</dimen>
+    <dimen name="space_xxl">32dp</dimen>
+
+    <!-- 圆角 -->
+    <dimen name="radius_sm">4dp</dimen>
+    <dimen name="radius_md">8dp</dimen>
+    <dimen name="radius_lg">12dp</dimen>
+    <dimen name="radius_xl">16dp</dimen>
+
+    <!-- 字号阶梯（旧 10/11/12 全部上调，户外可读） -->
+    <dimen name="font_xs">12sp</dimen>      <!-- 极少用，仅注释/版权 -->
+    <dimen name="font_sm">14sp</dimen>      <!-- 默认正文下限 -->
+    <dimen name="font_md">16sp</dimen>      <!-- 标签 / 列表正文 -->
+    <dimen name="font_lg">18sp</dimen>      <!-- 小标题 / 主按钮 -->
+    <dimen name="font_xl">22sp</dimen>      <!-- 标题 -->
+    <dimen name="font_xxl">28sp</dimen>     <!-- 视频上的状态徽章 -->
+
+    <!-- 图标尺寸 -->
+    <dimen name="icon_sm">20dp</dimen>
+    <dimen name="icon_md">24dp</dimen>
+    <dimen name="icon_lg">32dp</dimen>
+    <dimen name="icon_xl">48dp</dimen>
+
+    <!-- 描边 -->
+    <dimen name="stroke_thin">1dp</dimen>
+    <dimen name="stroke_med">2dp</dimen>
+    <dimen name="stroke_thick">3dp</dimen>
+
+    <!-- 顶栏 / 底栏 -->
+    <dimen name="toolbar_height">56dp</dimen>
+    <dimen name="bottombar_height">64dp</dimen>
+
+    <!-- 列表行 -->
+    <dimen name="list_row_min">56dp</dimen>
+
+    <!-- 阴影 elevation -->
+    <dimen name="elev_card">2dp</dimen>
+    <dimen name="elev_overlay">6dp</dimen>
+</resources>

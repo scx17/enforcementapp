@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- =========================================================
+         执法仪 App · 颜色 token
+         设计原则：户外阳光下可读优先；高对比、避免中灰。
+         ========================================================= -->
+
+    <!-- Surface（深色基底；摄像头取景需要暗背景以减反光） -->
+    <color name="surface_bg">#0E1320</color>          <!-- 页面底色 -->
+    <color name="surface_card">#1A2235</color>        <!-- 卡片 / 列表行 -->
+    <color name="surface_elevated">#232D45</color>    <!-- 浮起元素 / 状态条 -->
+    <color name="surface_overlay">#E60E1320</color>   <!-- 90% 不透明叠加，保证视频上字清晰 -->
+
+    <!-- Brand -->
+    <color name="brand_primary">#1A237E</color>       <!-- 深蓝 (theme color) -->
+    <color name="brand_primary_variant">#0D47A1</color>
+
+    <!-- Text（白系阶梯，避免中灰失真） -->
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#D5DCE8</color>      <!-- 副标题/标签，不再用 #888 -->
+    <color name="text_tertiary">#9BA5B7</color>       <!-- 提示/占位，最低限度 -->
+    <color name="text_disabled">#5B6478</color>
+    <color name="text_inverse">#0E1320</color>
+
+    <!-- Accent（户外友好，高饱和） -->
+    <color name="accent_blue">#4FB3FF</color>          <!-- 主交互 -->
+    <color name="accent_blue_pressed">#2D9AEB</color>
+    <color name="accent_orange">#FF9F2C</color>        <!-- 警示/对讲中 -->
+    <color name="accent_red">#FF5C5C</color>           <!-- 录制中/危险 -->
+    <color name="accent_green">#5BD971</color>         <!-- 成功/在线 -->
+
+    <!-- 语义 -->
+    <color name="status_success">@color/accent_green</color>
+    <color name="status_warning">@color/accent_orange</color>
+    <color name="status_danger">@color/accent_red</color>
+    <color name="status_recording">#FF3B3B</color>     <!-- 红点闪烁 -->
+    <color name="status_intercom">@color/accent_orange</color>
+
+    <!-- 分隔线 / 描边 -->
+    <color name="divider">#2E3852</color>
+    <color name="border">#3A4660</color>
+    <color name="border_strong">#5A6680</color>
+
+    <!-- Tap highlight -->
+    <color name="ripple_light">#33FFFFFF</color>
+    <color name="ripple_dark">#33000000</color>
+</resources>
