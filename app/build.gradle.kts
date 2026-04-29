@@ -24,6 +24,16 @@ android {
         }
     }
 
+    // 输出 APK 命名：HdcEnforcement-v<versionName>-vc<versionCode>.apk（不含 debug/release 字样）
+    applicationVariants.all {
+        val variant = this
+        outputs.all {
+            val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            output.outputFileName =
+                "HdcEnforcement-v${variant.versionName}-vc${variant.versionCode}.apk"
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
