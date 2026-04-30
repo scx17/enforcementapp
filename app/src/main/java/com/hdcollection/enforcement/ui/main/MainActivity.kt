@@ -1100,18 +1100,19 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         dialog.show()
     }
 
-    /** 启动时从平台拉取最新 customCode（处理管理员改名/首次迁移回填） */
+    /**
+     * 启动时从平台拉取规范配置:
+     *   - customCode（处理管理员改名/首次迁移回填）
+     *   - sipDeviceId（漂移迁移：本地缓存的老算法 ID 与 DB SHA-256 ID 不一致时强制重注册）
+     */
     private fun syncCustomCodeFromPlatform() {
         val apiUrl = settings.platformApiUrl.trimEnd('/')
         if (apiUrl.isEmpty()) return
         Thread {
             try {
-                val imei = try {
-                    val dm = android.app.devicemanager.DeviceManager.getInstance()
-                    dm.imei?.takeIf { it.isNotBlank() } ?: ""
-                } catch (_: Throwable) { "" }
+                // 用稳定 IMEI（与 DB 写入 gb_device.IMEI 时一致），保证 ANDROID_xxx fallback 设备也能被查到
+                val imei = com.hdcollection.enforcement.util.DeviceIdentity.getStableImei(this)
                 val sipDeviceId = settings.deviceId
-                // IMEI 和 SIP DeviceId 都没有时跳过
                 if (imei.isBlank() && sipDeviceId.isBlank()) return@Thread
 
                 val urlBuilder = StringBuilder("$apiUrl/api/device/me?")
@@ -1131,16 +1132,36 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
                 if (root.get("success")?.asBoolean != true) return@Thread
 
                 val data = root.getAsJsonObject("data")
-                val serverCode = data.get("customCodeDisplay")?.asString
-                    ?: data.get("customCode")?.asString ?: return@Thread
 
-                if (serverCode.isNotBlank() && serverCode != settings.customCode) {
+                // 1. customCode 同步
+                val serverCode = data.get("customCodeDisplay")?.asString
+                    ?: data.get("customCode")?.asString
+                if (!serverCode.isNullOrBlank() && serverCode != settings.customCode) {
                     settings.customCode = serverCode
                     Timber.i("同步 customCode 成功: $serverCode")
                     runOnUiThread { updateDeviceInfo() }
                 }
+
+                // 2. sipDeviceId 漂移迁移：DB 是真理，与本地不一致就用 DB 值重注册
+                val serverSipDeviceId = data.get("sipDeviceId")?.asString
+                if (!serverSipDeviceId.isNullOrBlank() && serverSipDeviceId != sipDeviceId) {
+                    Timber.w("SIP DeviceId 漂移检测: 本地=$sipDeviceId, 平台=$serverSipDeviceId, 触发一刀切重注册")
+                    settings.deviceId = serverSipDeviceId
+                    settings.sipUsername = serverSipDeviceId
+                    runOnUiThread {
+                        updateDeviceInfo()
+                        val reloadIntent = Intent(
+                            this,
+                            com.hdcollection.enforcement.service.MediaCaptureService::class.java
+                        ).apply {
+                            action = com.hdcollection.enforcement.service.MediaCaptureService.ACTION_RELOAD_GB28181
+                        }
+                        startService(reloadIntent)
+                        Timber.i("SIP DeviceId 漂移迁移: 已下发 RELOAD_GB28181, 老 WVP 记录将自然过期")
+                    }
+                }
             } catch (e: Exception) {
-                Timber.w(e, "同步 customCode 失败（网络异常）")
+                Timber.w(e, "同步 customCode/sipDeviceId 失败（网络异常）")
             }
         }.start()
     }
