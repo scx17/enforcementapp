@@ -731,6 +731,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
 
             mediaService?.stopLocalRecording()
             isRecording = false
+            com.hdcollection.enforcement.upgrade.AppBusyState.recording = false
             currentRecordFile = null
             playVoice(R.raw.voice_stop_recording)
             showRecordingIndicator(false)
@@ -762,6 +763,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             currentRecordFile = file
             mediaService?.startLocalRecording(file)
             isRecording = true
+            com.hdcollection.enforcement.upgrade.AppBusyState.recording = true
             recordingStartTime = System.currentTimeMillis()
             playVoice(R.raw.voice_start_recording)
             showRecordingIndicator(true)

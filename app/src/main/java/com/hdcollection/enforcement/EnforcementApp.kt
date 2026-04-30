@@ -84,6 +84,8 @@ class EnforcementApp : Application() {
         UserOpLogger.init(this, settings)
 
         sipManager = SipManager(settings)
+        // 升级模块的"是否对讲中"判断要查 sipManager.state
+        com.hdcollection.enforcement.upgrade.AppBusyState.sipManagerProvider = { sipManager }
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 sipManager.start()
@@ -205,6 +207,25 @@ class EnforcementApp : Application() {
                 ).build()
                 wm.enqueueUniquePeriodicWork("storage_cleanup", ExistingPeriodicWorkPolicy.KEEP, storageCleanRequest)
                 Timber.i("WorkManager 存储清理任务已注册: storage_cleanup (每日)")
+
+                // 远程升级周期检查：1H 周期 + 15m flex（启动时间错峰，减少集中下载带宽峰值）
+                val upgradeRequest = PeriodicWorkRequestBuilder<com.hdcollection.enforcement.upgrade.UpgradeWorker>(
+                    1, TimeUnit.HOURS,
+                    15, TimeUnit.MINUTES
+                ).setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                    .build()
+                // REPLACE 而非 KEEP——本机器以前注册过 1H 任务但需求改了的话能覆盖
+                wm.enqueueUniquePeriodicWork("app_upgrade_check",
+                    ExistingPeriodicWorkPolicy.UPDATE, upgradeRequest)
+                Timber.i("WorkManager 升级检查任务已注册: app_upgrade_check (每1小时)")
+
+                // 启动时立即跑一次 OneTimeWorkRequest 检查，不等 1H 周期
+                val upgradeOnce = androidx.work.OneTimeWorkRequestBuilder<com.hdcollection.enforcement.upgrade.UpgradeWorker>()
+                    .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                    .setInitialDelay(20, TimeUnit.SECONDS)  // 等设备配置加载、SIP 注册完成后再检查
+                    .build()
+                wm.enqueue(upgradeOnce)
+                Timber.i("WorkManager 启动检查已入队: 20s 后立即触发 UpgradeWorker")
             } catch (e: Exception) {
                 Timber.e(e, "WorkManager 注册失败")
             }
@@ -257,6 +278,11 @@ class EnforcementApp : Application() {
                         snap.signal?.let { put("signal", it) }
                         snap.networkType?.let { put("networkType", it) }
                         snap.storageRemaining?.let { put("storageRemaining", it) }
+                        // App 版本（用于平台监控版本分布 + 升级链路决策）
+                        val vc = com.hdcollection.enforcement.upgrade.UpgradeManager.getCurrentVersionCode(this@EnforcementApp)
+                        val vn = com.hdcollection.enforcement.upgrade.UpgradeManager.getCurrentVersionName(this@EnforcementApp)
+                        if (vc > 0) put("appVersionCode", vc)
+                        if (vn.isNotEmpty()) put("appVersionName", vn)
                     }
                     val json = jsonObj.toString()
                     val body = okhttp3.RequestBody.create(

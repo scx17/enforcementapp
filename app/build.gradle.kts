@@ -12,15 +12,36 @@ android {
         applicationId = "com.hdcollection.enforcement"
         minSdk = 25
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.0.2"
+        versionCode = 4
+        versionName = "1.0.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // 远程升级链路要求新旧包签名一致。release 走本地 keystore（不进 git，
+    // 配置在 ~/.gradle/gradle.properties 里），未提供属性时退化用 debug 签名
+    // 让本地随手 ./gradlew assembleRelease 不会断。
+    signingConfigs {
+        create("release") {
+            val ksPath = (project.findProperty("ENFORCEMENT_KEYSTORE_FILE") as? String).orEmpty()
+            val ksPassword = (project.findProperty("ENFORCEMENT_KEYSTORE_PASSWORD") as? String).orEmpty()
+            val keyAlias = (project.findProperty("ENFORCEMENT_KEY_ALIAS") as? String).orEmpty()
+            val keyPassword = (project.findProperty("ENFORCEMENT_KEY_PASSWORD") as? String).orEmpty()
+            if (ksPath.isNotEmpty() && file(ksPath).exists()) {
+                storeFile = file(ksPath)
+                storePassword = ksPassword
+                this.keyAlias = keyAlias
+                this.keyPassword = keyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // 仅当 release keystore 配置完整时才用，否则回退 debug 签名（仅用于本地构建）
+            val rc = signingConfigs.getByName("release")
+            signingConfig = if (rc.storeFile != null) rc else signingConfigs.getByName("debug")
         }
     }
 

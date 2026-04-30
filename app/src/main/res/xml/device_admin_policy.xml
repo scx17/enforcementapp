@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Device Admin policy 声明——给 dpm set-device-owner 使用。
+  最小集即可：不需要 wipe/lock 等操作，远程升级链路只需要 Device Owner
+  身份本身（用于 PackageInstaller.Session 静默装包）。
+  policies 为空也合法，但保留 force-lock 给"远程锁屏"未来扩展。
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <force-lock />
+    </uses-policies>
+</device-admin>
