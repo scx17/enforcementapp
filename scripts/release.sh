@@ -101,10 +101,29 @@ ORIGINAL_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 ORIGINAL_COMMIT="$(git rev-parse --short HEAD)"
 
 # ============ 读当前 versionCode 计算下一个 ============
-CURRENT_VC=$(grep -E '^\s*versionCode\s*=\s*[0-9]+' "$GRADLE_FILE" | head -1 | sed 's/[^0-9]//g')
-if [[ -z "$CURRENT_VC" ]]; then
+LOCAL_VC=$(grep -E '^\s*versionCode\s*=\s*[0-9]+' "$GRADLE_FILE" | head -1 | sed 's/[^0-9]//g')
+if [[ -z "$LOCAL_VC" ]]; then
     echo "❌ 无法从 $GRADLE_FILE 解析 versionCode" >&2
     exit 1
+fi
+
+# 也问平台拿当前最大 vc。脚本默认 trap cleanup 会还原 build.gradle.kts,
+# 所以仓库 vc 不一定追上平台最新版本号,必须 max(local, server) + 1 防冲突。
+SERVER_MAX_VC=$(curl -s --max-time 5 "$PLATFORM/api/admin/app-release" 2>/dev/null \
+    | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+    vcs = [r["versionCode"] for r in d.get("data", [])]
+    print(max(vcs) if vcs else 0)
+except Exception:
+    print(0)' 2>/dev/null || echo 0)
+SERVER_MAX_VC=${SERVER_MAX_VC:-0}
+
+if (( SERVER_MAX_VC > LOCAL_VC )); then
+    CURRENT_VC=$SERVER_MAX_VC
+    echo "ℹ️  平台已有 vc=$SERVER_MAX_VC > 本地 vc=$LOCAL_VC,以平台为准"
+else
+    CURRENT_VC=$LOCAL_VC
 fi
 NEW_VC=$((CURRENT_VC + 1))
 echo "═════════════════════════════════════════════"
