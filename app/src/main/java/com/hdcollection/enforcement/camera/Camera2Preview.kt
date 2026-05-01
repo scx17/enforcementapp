@@ -463,6 +463,13 @@ class Camera2Preview(private val context: Context) {
                 Timber.w(e, "提升编码线程优先级失败")
             }
             val bufferInfo = MediaCodec.BufferInfo()
+            // 帧时序统计（每秒打一次）—— 现场快速判断"实际帧率""帧间隔抖动""编码耗时"
+            var statsWindowStartNs = System.nanoTime()
+            var statsFrames = 0
+            var statsIdrCount = 0
+            var statsTotalEncodeNs = 0L
+            var statsMaxIntervalNs = 0L
+            var statsLastFrameNs = 0L
             while (isEncoding) {
                 try {
                     val codec = mediaCodec ?: break
@@ -495,8 +502,34 @@ class Camera2Preview(private val context: Context) {
                             Timber.i("Encoder: P-frame #$frameCount (${data.size}B), pts=${bufferInfo.presentationTimeUs}")
                         }
 
+                        val sendStartNs = System.nanoTime()
                         rtpSender?.sendVideoFrame(data, bufferInfo.presentationTimeUs / 1000, isKeyFrame, prefix)
                         rtpSender?.flushAudioQueue()  // 视频帧后刷出音频，避免锁竞争
+                        val sendEndNs = System.nanoTime()
+
+                        // 帧时序统计：每秒汇总一次「实际 fps / 最大帧间隔 / 平均编码+发送耗时」
+                        statsFrames++
+                        if (isKeyFrame) statsIdrCount++
+                        statsTotalEncodeNs += (sendEndNs - sendStartNs)
+                        if (statsLastFrameNs > 0) {
+                            val interval = sendEndNs - statsLastFrameNs
+                            if (interval > statsMaxIntervalNs) statsMaxIntervalNs = interval
+                        }
+                        statsLastFrameNs = sendEndNs
+                        val winElapsedMs = (sendEndNs - statsWindowStartNs) / 1_000_000
+                        if (winElapsedMs >= 1000) {
+                            val actualFps = statsFrames * 1000.0 / winElapsedMs
+                            val avgSendMs = statsTotalEncodeNs / statsFrames / 1_000_000.0
+                            val maxIntervalMs = statsMaxIntervalNs / 1_000_000.0
+                            Timber.i("帧时序统计 [%.1fs]: 实际 fps=%.1f, IDR=%d, 最大帧间隔=%.0fms, 平均编码+发送=%.1fms".format(
+                                winElapsedMs / 1000.0, actualFps, statsIdrCount, maxIntervalMs, avgSendMs
+                            ))
+                            statsWindowStartNs = sendEndNs
+                            statsFrames = 0
+                            statsIdrCount = 0
+                            statsTotalEncodeNs = 0
+                            statsMaxIntervalNs = 0
+                        }
                     } else if (index == MediaCodec.INFO_TRY_AGAIN_LATER) {
                         // 正常超时，继续
                     }
