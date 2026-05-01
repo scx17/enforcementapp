@@ -26,7 +26,10 @@ class GB28181Manager(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private var localIp: String = "0.0.0.0"
-    private val localPort get() = settings.sipLocalPort
+    // localPort 是 socket 实际 bind 的端口。fallback 路径会改成 OS 分配的随机端口,
+    // 必须用真实端口而非 settings.sipLocalPort,否则 SipMessage Via 头写错端口,
+    // WVP 按 Via 端口回包,经过 NAT 找不到 conntrack 映射 → 回包丢失。
+    private var localPort: Int = settings.sipLocalPort
 
     // keepAlive 连续失败次数 — 用于判断是否需要触发 onRegistrationFailed 并重建 socket
     private var keepaliveFailCount = 0
@@ -53,15 +56,17 @@ class GB28181Manager(
                     System.setProperty("java.net.preferIPv4Stack", "true")
                     // 绑定到设备的 WiFi IPv4 地址
                     val bindAddr = java.net.Inet4Address.getByName(localIp)
-                    Timber.i("GB28181: 尝试 bind $localIp:$localPort (settings.sipLocalPort)")
+                    val desiredPort = settings.sipLocalPort
+                    Timber.i("GB28181: 尝试 bind $localIp:$desiredPort (settings.sipLocalPort)")
                     // 端口冲突 fallback:5060/5070 等指定端口被系统服务(如 Android 7 SipService)
                     // 占用时,DatagramSocket 抛 BindException。让 OS 分配随机高位端口,
-                    // 完全规避冲突。WVP 端按 NAT 映射端口回包,与本地端口选什么无关。
+                    // 完全规避冲突。
                     udpSocket = try {
-                        DatagramSocket(localPort, bindAddr)
+                        DatagramSocket(desiredPort, bindAddr).also { localPort = it.localPort }
                     } catch (be: java.net.BindException) {
-                        Timber.w(be, "GB28181: bind $localPort 失败,fallback 到随机高位端口")
+                        Timber.w(be, "GB28181: bind $desiredPort 失败,fallback 到随机高位端口")
                         DatagramSocket(0, bindAddr).also {
+                            localPort = it.localPort
                             Timber.i("GB28181: fallback random port = ${it.localPort}")
                         }
                     }
