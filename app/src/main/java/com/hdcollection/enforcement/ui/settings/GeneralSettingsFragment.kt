@@ -7,6 +7,7 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.hdcollection.enforcement.BuildConfig
 import com.hdcollection.enforcement.EnforcementApp
 import com.hdcollection.enforcement.R
 import com.hdcollection.enforcement.config.RemoteConfig
@@ -21,8 +22,14 @@ class GeneralSettingsFragment : Fragment() {
 
     // 选项必须与平台「设备远程配置」DeviceConfigPage.vue 完全一致 —— 两端通过同一份
     // RemoteConfig（resolution = "1280x720" 长格式）保持双向同步。
-    private val resolutionLabels = listOf("720P (1280x720)", "1080P (1920x1080)", "1440P (2560x1440)")
-    private val resolutionValues = listOf("1280x720", "1920x1080", "2560x1440")
+    private val resolutionLabels = listOf(
+        "360P (640x360)",
+        "480P (848x480)",
+        "720P (1280x720)",
+        "1080P (1920x1080)",
+        "1440P (2560x1440)"
+    )
+    private val resolutionValues = listOf("640x360", "848x480", "1280x720", "1920x1080", "2560x1440")
     private val fpsValues = listOf(15, 20, 25, 30)
     private val bitrateLabels = listOf(
         "512 kbps (流畅)",
@@ -45,6 +52,8 @@ class GeneralSettingsFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         settings = AppSettings(requireContext().getSharedPreferences("app_settings", 0))
         val app = requireContext().applicationContext as EnforcementApp
+
+        binding.tvAppVersion.text = "App 版本：v${BuildConfig.VERSION_NAME} (vc=${BuildConfig.VERSION_CODE})"
 
         binding.spinnerResolution.adapter = makeAdapter(resolutionLabels)
         binding.spinnerFps.adapter = makeAdapter(fpsValues.map { "$it fps" })

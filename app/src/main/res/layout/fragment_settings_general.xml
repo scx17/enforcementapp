@@ -28,5 +28,11 @@
 
         <Button android:id="@+id/btnSaveGeneral" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:text="保存" android:backgroundTint="#1A237E" android:textColor="#FFFFFF" />
+
+        <TextView android:id="@+id/tvAppVersion"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:gravity="center"
+            android:textColor="#888888" android:textSize="11sp"
+            android:layout_marginTop="12dp" />
     </LinearLayout>
 </ScrollView>
