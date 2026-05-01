@@ -12,9 +12,14 @@ android {
         applicationId = "com.hdcollection.enforcement"
         minSdk = 25
         targetSdk = 36
-        versionCode = 4
-        versionName = "1.0.3"
+        versionCode = 7
+        versionName = "1.0.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // 远程升级零现场配置兜底：卸载重装后 SharedPreferences 全清，App 启动时
+        // 如果 platformApiUrl 为空就用这个默认值，能联网后通过 IMEI 拉规范配置。
+        // 现场每台首次配置一次后，编译时常量被 settings 覆盖；以后再卸载重装也不用现场配。
+        buildConfigField("String", "DEFAULT_PLATFORM_API_URL", "\"http://106.53.166.236\"")
     }
 
     // 远程升级链路要求新旧包签名一致。release 走本地 keystore（不进 git，

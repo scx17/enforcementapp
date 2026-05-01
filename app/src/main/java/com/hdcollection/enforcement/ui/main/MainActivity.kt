@@ -157,7 +157,15 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
         alarmReporter = AlarmReporter(settings)
 
-        // 全新设备未配置 → 仅跳设置页，不启动服务，不请求权限，避免两个 Activity 同时争焦点触发 ANR
+        // 卸载重装/SharedPreferences 清空后的自动恢复：
+        // 如果本地 deviceId 为空但 platformApiUrl 有兜底值，先用 IMEI 同步反查 /api/device/me，
+        // 拿回 sipDeviceId/customCode/SIP 服务器配置写回 settings。
+        // 5 秒超时——失败就降级到跳设置页。
+        if (settings.deviceId.isBlank() && settings.platformApiUrl.isNotEmpty()) {
+            tryRecoverFromPlatformBlocking()
+        }
+
+        // 全新设备(自动恢复后仍未配置) → 仅跳设置页，不启动服务，不请求权限，避免两个 Activity 同时争焦点触发 ANR
         if (settings.customCode.isBlank() && settings.deviceId.isBlank()) {
             Timber.w("设备未配置，跳转设置页")
             isNavigatingInternally = true
@@ -1103,6 +1111,70 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
     }
 
     /**
+     * 卸载重装后的同步恢复路径：用稳定 IMEI 调 /api/device/me，
+     * 把 sipDeviceId / customCode / sipServer / sipPort / sipPassword 一站式写回 settings。
+     * 5 秒超时；UI 线程上调用，但只在"deviceId 为空 + platformApiUrl 兜底已生效"时进入这里。
+     * 失败不抛，降级到设置页 / 后续 syncCustomCodeFromPlatform 异步重试。
+     */
+    private fun tryRecoverFromPlatformBlocking() {
+        val apiUrl = settings.platformApiUrl.trimEnd('/')
+        val imei = com.hdcollection.enforcement.util.DeviceIdentity.getStableImei(this)
+        if (imei.isBlank()) {
+            Timber.w("自动恢复跳过: IMEI 为空")
+            return
+        }
+        val url = "$apiUrl/api/device/me?imei=$imei"
+        Timber.i("自动恢复尝试: GET $url")
+        // 不能在主线程发网络请求(StrictMode NetworkOnMainThreadException)，
+        // 用子线程跑 + CountDownLatch 在主线程阻塞等待 5 秒。
+        val latch = java.util.concurrent.CountDownLatch(1)
+        Thread {
+            try {
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(4, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(4, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+                val req = okhttp3.Request.Builder().url(url).get().build()
+                val resp = client.newCall(req).execute()
+                val json = resp.body?.string() ?: ""
+                val root = com.google.gson.JsonParser.parseString(json).asJsonObject
+                if (root.get("success")?.asBoolean != true) {
+                    Timber.w("自动恢复: 平台无该 IMEI 设备记录, 走全新设备流程")
+                    return@Thread
+                }
+                val data = root.getAsJsonObject("data")
+                val sipDeviceId = data.get("sipDeviceId")?.asString
+                val customCode = data.get("customCodeDisplay")?.takeIf { !it.isJsonNull }?.asString
+                    ?: data.get("customCode")?.takeIf { !it.isJsonNull }?.asString
+                val sipServer = data.get("sipServer")?.takeIf { !it.isJsonNull }?.asString
+                val sipPort = data.get("sipPort")?.takeIf { !it.isJsonNull }?.asString
+                val sipPassword = data.get("sipPassword")?.takeIf { !it.isJsonNull }?.asString
+
+                if (!sipDeviceId.isNullOrBlank()) {
+                    settings.deviceId = sipDeviceId
+                    settings.sipUsername = sipDeviceId
+                }
+                if (!customCode.isNullOrBlank()) settings.customCode = customCode
+                if (!sipServer.isNullOrBlank()) settings.sipServer = sipServer
+                if (!sipPort.isNullOrBlank()) settings.sipPort = sipPort
+                if (!sipPassword.isNullOrBlank()) settings.sipPassword = sipPassword
+                Timber.i("自动恢复成功: deviceId=$sipDeviceId, customCode=$customCode, sipServer=$sipServer")
+            } catch (t: Throwable) {
+                Timber.w(t, "自动恢复异常(降级到设置页)")
+            } finally {
+                latch.countDown()
+            }
+        }.start()
+        try {
+            if (!latch.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                Timber.w("自动恢复 5 秒超时(降级到设置页)")
+            }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+    }
+
+    /**
      * 启动时从平台拉取规范配置:
      *   - customCode（处理管理员改名/首次迁移回填）
      *   - sipDeviceId（漂移迁移：本地缓存的老算法 ID 与 DB SHA-256 ID 不一致时强制重注册）
@@ -1144,12 +1216,24 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
                     runOnUiThread { updateDeviceInfo() }
                 }
 
-                // 2. sipDeviceId 漂移迁移：DB 是真理，与本地不一致就用 DB 值重注册
+                // 2. sipDeviceId / SIP 服务器 一站式恢复：DB 是真理。
+                // 适用场景：(a) 卸载重装后 settings 全空 (b) 算法漂移导致 DB 与本地不一致
                 val serverSipDeviceId = data.get("sipDeviceId")?.asString
-                if (!serverSipDeviceId.isNullOrBlank() && serverSipDeviceId != sipDeviceId) {
-                    Timber.w("SIP DeviceId 漂移检测: 本地=$sipDeviceId, 平台=$serverSipDeviceId, 触发一刀切重注册")
-                    settings.deviceId = serverSipDeviceId
-                    settings.sipUsername = serverSipDeviceId
+                val serverSipServer = data.get("sipServer")?.takeIf { !it.isJsonNull }?.asString
+                val serverSipPort = data.get("sipPort")?.takeIf { !it.isJsonNull }?.asString
+                val serverSipPassword = data.get("sipPassword")?.takeIf { !it.isJsonNull }?.asString
+
+                val deviceIdChanged = !serverSipDeviceId.isNullOrBlank() && serverSipDeviceId != sipDeviceId
+                val sipServerChanged = !serverSipServer.isNullOrBlank() && serverSipServer != settings.sipServer
+                if (deviceIdChanged || sipServerChanged) {
+                    Timber.w("SIP 配置自动恢复: deviceId=$sipDeviceId→$serverSipDeviceId, sipServer=${settings.sipServer}→$serverSipServer")
+                    if (!serverSipDeviceId.isNullOrBlank()) {
+                        settings.deviceId = serverSipDeviceId
+                        settings.sipUsername = serverSipDeviceId
+                    }
+                    if (!serverSipServer.isNullOrBlank()) settings.sipServer = serverSipServer
+                    if (!serverSipPort.isNullOrBlank()) settings.sipPort = serverSipPort
+                    if (!serverSipPassword.isNullOrBlank()) settings.sipPassword = serverSipPassword
                     runOnUiThread {
                         updateDeviceInfo()
                         val reloadIntent = Intent(
@@ -1159,7 +1243,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
                             action = com.hdcollection.enforcement.service.MediaCaptureService.ACTION_RELOAD_GB28181
                         }
                         startService(reloadIntent)
-                        Timber.i("SIP DeviceId 漂移迁移: 已下发 RELOAD_GB28181, 老 WVP 记录将自然过期")
+                        Timber.i("SIP 配置已恢复并下发 RELOAD_GB28181")
                     }
                 }
             } catch (e: Exception) {

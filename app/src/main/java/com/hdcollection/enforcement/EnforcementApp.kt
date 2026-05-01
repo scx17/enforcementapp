@@ -79,6 +79,16 @@ class EnforcementApp : Application() {
 
         // 初始化 SIP 对讲
         val settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
+        // 卸载重装后 SharedPreferences 全清，写入编译时兜底 platformApiUrl，
+        // 让 MainActivity.syncCustomCodeFromPlatform 能联网调 /api/device/me?imei=xxx
+        // 自动恢复 deviceId/customCode/sipServer。免现场扫码。
+        if (settings.platformApiUrl.isEmpty()) {
+            val fallback = com.hdcollection.enforcement.BuildConfig.DEFAULT_PLATFORM_API_URL
+            if (fallback.isNotEmpty()) {
+                settings.platformApiUrl = fallback
+                Timber.i("EnforcementApp: 使用编译时兜底 platformApiUrl=$fallback")
+            }
+        }
 
         // 初始化用户操作审计（需要在任何 record 调用之前完成）
         UserOpLogger.init(this, settings)
