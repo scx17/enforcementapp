@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <!-- Wi-Fi:读信号强度(DeviceStatusCollector)+ 持 WifiLock 防屏幕熄灭后 supplicant 进省电模式被 AP 踢 -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 
     <!-- 摄像头和音频 -->
     <uses-permission android:name="android.permission.CAMERA" />

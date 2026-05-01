@@ -54,6 +54,9 @@ class MediaCaptureService : Service(), StreamCallback {
     private lateinit var settings: AppSettings
     private var gbNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    // Wi-Fi 高优先级锁——告诉系统屏幕熄灭也别让 supplicant 进省电模式,
+    // 避免 BT280T 等定制 ROM 上 wifi_sleep_policy=NEVER 失效导致被 AP 频繁踢
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
     private val listeners = java.util.concurrent.CopyOnWriteArrayList<Listener>()
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -71,6 +74,22 @@ class MediaCaptureService : Service(), StreamCallback {
             "EnforcementApp::MediaCaptureService"
         ).apply { acquire() }
         Timber.i("Service WakeLock acquired")
+
+        // 申请 Wi-Fi 高功耗锁,屏幕熄灭也维持 supplicant 高功耗扫描/连接,
+        // 防 RSSI 边缘信号下被 AP 闲置踢出
+        try {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            wifiLock = wm.createWifiLock(
+                android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                "EnforcementApp::WifiLock"
+            ).apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            Timber.i("Service WifiLock(FULL_HIGH_PERF) acquired")
+        } catch (t: Throwable) {
+            Timber.w(t, "WifiLock 申请失败,wifi 仍按系统默认省电策略走")
+        }
         settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
         startForegroundWithNotification()
         camera = Camera2Preview(this).also { it.start() }
@@ -155,6 +174,9 @@ class MediaCaptureService : Service(), StreamCallback {
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         Timber.i("Service WakeLock released")
+        wifiLock?.let { if (it.isHeld) it.release() }
+        wifiLock = null
+        Timber.i("Service WifiLock released")
         super.onDestroy()
     }
 
