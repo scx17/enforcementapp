@@ -96,6 +96,22 @@ class EnforcementApp : Application() {
         sipManager = SipManager(settings)
         // 升级模块的"是否对讲中"判断要查 sipManager.state
         com.hdcollection.enforcement.upgrade.AppBusyState.sipManagerProvider = { sipManager }
+
+        // 锁屏白名单:Device Owner 时把自己加入 LockTask 白名单,
+        // MainActivity 进入 Lock Task Mode 时无需用户确认(否则系统会弹"屏幕固定?")
+        try {
+            val dpm = getSystemService(android.content.Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+            if (dpm.isDeviceOwnerApp(packageName)) {
+                val admin = android.content.ComponentName(
+                    this, com.hdcollection.enforcement.upgrade.AppDeviceAdminReceiver::class.java)
+                dpm.setLockTaskPackages(admin, arrayOf(packageName))
+                Timber.i("LockTask 白名单已设置: $packageName (Device Owner)")
+            } else {
+                Timber.w("非 Device Owner,LockTask 进入时会弹系统确认窗")
+            }
+        } catch (t: Throwable) {
+            Timber.w(t, "setLockTaskPackages 失败")
+        }
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 sipManager.start()

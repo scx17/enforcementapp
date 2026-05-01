@@ -204,6 +204,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         shutterSound.load(MediaActionSound.SHUTTER_CLICK)
 
         setupBottomButtons()
+        setupUnlockGesture()
         updateDeviceInfo()
         updateStreamStatus("初始化", "#9E9E9E")
 
@@ -271,7 +272,71 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         if (isFullyInitialized) isNavigatingInternally = false
         clockHandler.post(clockRunnable)
         updateDeviceInfo()
+        enterLockTaskIfNeeded()
     }
+
+    // ===== Lock Task Mode (执法仪 Kiosk 模式) =====
+    // 已配置且非临时解锁状态时进入屏幕固定,用户按 HOME/Recent/状态栏均无效。
+    // Device Owner 设备无系统确认弹窗;非 Device Owner 系统会弹一次"屏幕固定?"
+    @Volatile private var lockTaskUnlockUntil = 0L
+
+    private fun enterLockTaskIfNeeded() {
+        if (android.os.Build.VERSION.SDK_INT < 21) return
+        // 设备未配置时不锁屏(用户要能进设置页)
+        if (settings.customCode.isBlank() && settings.deviceId.isBlank()) return
+        // 运维 5 连点解锁后留 5 分钟操作窗口,期间不重新锁
+        if (System.currentTimeMillis() < lockTaskUnlockUntil) return
+        try {
+            val am = getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            if (am.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE) return
+            startLockTask()
+            Timber.i("LockTask: 已进入屏幕固定模式")
+        } catch (t: Throwable) {
+            Timber.w(t, "LockTask: startLockTask 失败")
+        }
+    }
+
+    // 5 连点 tvTime 隐蔽手势 → 退出 LockTask,5 分钟内 onResume 不再自动锁回
+    private val unlockTapTimes = ArrayDeque<Long>()
+    private val UNLOCK_TAP_COUNT = 5
+    private val UNLOCK_TAP_WINDOW_MS = 3000L
+    private val UNLOCK_GRACE_MS = 5 * 60 * 1000L
+
+    private fun setupUnlockGesture() {
+        findViewById<TextView>(R.id.tvTime)?.apply {
+            isClickable = true
+            setOnClickListener {
+                val now = System.currentTimeMillis()
+                unlockTapTimes.addLast(now)
+                while (unlockTapTimes.isNotEmpty()
+                    && now - unlockTapTimes.first() > UNLOCK_TAP_WINDOW_MS) {
+                    unlockTapTimes.removeFirst()
+                }
+                if (unlockTapTimes.size >= UNLOCK_TAP_COUNT) {
+                    unlockTapTimes.clear()
+                    exitLockTaskWithGrace()
+                }
+            }
+        }
+    }
+
+    private fun exitLockTaskWithGrace() {
+        if (android.os.Build.VERSION.SDK_INT < 21) return
+        try {
+            val am = getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            if (am.lockTaskModeState == android.app.ActivityManager.LOCK_TASK_MODE_NONE) {
+                Toast.makeText(this, "当前未锁屏", Toast.LENGTH_SHORT).show()
+                return
+            }
+            stopLockTask()
+            lockTaskUnlockUntil = System.currentTimeMillis() + UNLOCK_GRACE_MS
+            Toast.makeText(this, "已退出锁屏,5 分钟内可自由操作", Toast.LENGTH_LONG).show()
+            Timber.w("LockTask: 运维 5 连点退出, ${UNLOCK_GRACE_MS / 1000}s 内不重锁")
+        } catch (t: Throwable) {
+            Timber.e(t, "LockTask: stopLockTask 失败")
+        }
+    }
+    // ===== /Lock Task =====
 
     private fun startInternalActivity(intent: Intent) {
         isNavigatingInternally = true
