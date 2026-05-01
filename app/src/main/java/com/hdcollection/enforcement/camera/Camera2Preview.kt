@@ -58,6 +58,35 @@ class Camera2Preview(private val context: Context) {
      * 不预先校验直接 createCaptureSession 会失败 ("Unsupported set of inputs/outputs")，
      * 编码器接不上数据，App 显示推流中但平台拉不到流。
      */
+    /**
+     * 选取最接近目标帧率的 AE_TARGET_FPS_RANGE。
+     * 优先级：
+     *   1. 等于 [target, target] 的精确锁定（最稳）
+     *   2. 包含 target 且 lower 最接近 target 的 range（防止暗光降帧）
+     *   3. null（用默认 range，通常 [7, 30]）
+     */
+    private fun pickFpsRange(target: Int): android.util.Range<Int>? {
+        return try {
+            val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val targetFacing = if (useFrontCamera) CameraCharacteristics.LENS_FACING_FRONT
+                else CameraCharacteristics.LENS_FACING_BACK
+            val targetId = cm.cameraIdList.firstOrNull {
+                cm.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == targetFacing
+            } ?: return null
+            val ranges = cm.getCameraCharacteristics(targetId)
+                .get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                ?: return null
+            // 1. 精确锁定 [target, target]
+            ranges.firstOrNull { it.lower == target && it.upper == target }?.let { return it }
+            // 2. 包含 target 且 lower 最高（防止暗光降帧）
+            ranges.filter { it.lower <= target && it.upper >= target }
+                .maxByOrNull { it.lower }
+        } catch (e: Exception) {
+            Timber.w(e, "查询 AE fps range 失败")
+            null
+        }
+    }
+
     private fun ensureSupportedEncoderSize(w: Int, h: Int): Pair<Int, Int> {
         return try {
             val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -388,6 +417,11 @@ class Camera2Preview(private val context: Context) {
             recSurfaceAtStart?.let { surfaces.add(it) }
             imageReader?.surface?.let { surfaces.add(it) }
 
+            // 选取最接近目标帧率的 AE_TARGET_FPS_RANGE，锁定摄像头输出帧率
+            // 不锁定时摄像头会用变长 range（如 [7, 30]），暗光下自动降到 7fps，
+            // 客户端缓冲忽空忽满 → 卡顿。锁定到固定值后摄像头会用更长曝光维持帧率。
+            val targetFpsRange = pickFpsRange(encFps)
+
             camera.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     captureSession = session
@@ -395,6 +429,10 @@ class Camera2Preview(private val context: Context) {
                         preview?.let { addTarget(it) }
                         addTarget(encSurface)
                         recSurfaceAtStart?.let { addTarget(it) }
+                        if (targetFpsRange != null) {
+                            set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, targetFpsRange)
+                            Timber.i("Camera fps range 锁定: $targetFpsRange")
+                        }
                     }
                     session.setRepeatingRequest(request.build(), null, bgHandler)
                     isEncoding = true
