@@ -89,8 +89,13 @@ class ServerSettingsFragment : Fragment() {
                 Toast.makeText(context, "请先输入设备编号（3-7 位）", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            if (!codeAvailable) {
-                Toast.makeText(context, "设备编号不可用，请更换", Toast.LENGTH_SHORT).show()
+            // codeAvailable=false 不再硬性阻断:可能是"自己历史 ghost 占着"
+            // (release 包 ANDROID_ID 变了)。允许提交,后端 SubmitDeviceConfig 会:
+            //  - 同 IMEI 占着 → existing 复用直接成功
+            //  - 不同 IMEI 占着 → already_used,App 启动 startWaitingForApproval 等管理员接管
+            // 仅在格式不合法时拦下(tvCodeStatus 文案会含"格式")
+            if (!codeAvailable && binding.tvCodeStatus.text.contains("格式")) {
+                Toast.makeText(context, "设备编号格式不合法，请更换", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             runAutoConfig(apiUrl, customCode, triggerSipReload = false, alsoFinishSave = false)
@@ -122,8 +127,9 @@ class ServerSettingsFragment : Fragment() {
                     Toast.makeText(context, "请输入平台地址", Toast.LENGTH_SHORT).show()
                     return@setOnClickListener
                 }
-                if (!codeAvailable) {
-                    Toast.makeText(context, "设备编号校验未通过，请等待或更换", Toast.LENGTH_SHORT).show()
+                // 同上:codeAvailable=false 不再硬阻断,允许提交后端兜底
+                if (!codeAvailable && binding.tvCodeStatus.text.contains("格式")) {
+                    Toast.makeText(context, "设备编号格式不合法，请更换", Toast.LENGTH_SHORT).show()
                     return@setOnClickListener
                 }
                 runAutoConfig(newApiUrl, customCode, triggerSipReload = true, alsoFinishSave = true)
@@ -362,9 +368,11 @@ class ServerSettingsFragment : Fragment() {
         Thread {
             try {
                 val excludeDeviceId = settings.deviceId.ifEmpty { null }
+                val imei = getImei()
+                // 后端 check-code 看到同 IMEI 占着会返回 available=true,避免"自己 ghost 占自己"误判
                 val body = okhttp3.RequestBody.create(
                     "application/json".toMediaTypeOrNull(),
-                    """{"code":"$code"${if (excludeDeviceId != null) ""","excludeDeviceId":"$excludeDeviceId"""" else ""}}"""
+                    """{"code":"$code","imei":"$imei"${if (excludeDeviceId != null) ""","excludeDeviceId":"$excludeDeviceId"""" else ""}}"""
                 )
                 val client = okhttp3.OkHttpClient.Builder()
                     .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
