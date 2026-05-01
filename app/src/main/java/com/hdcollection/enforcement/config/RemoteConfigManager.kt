@@ -87,6 +87,54 @@ class RemoteConfigManager(
             .build()
     }
 
+    /**
+     * 本地（App 设置页）修改视频参数后调用。
+     *
+     *  1. 立刻更新内存 StateFlow + 持久化 → MediaCaptureService 监听到变化会自动热重启编码器
+     *  2. 异步 PUT 到平台 /api/device-config/{deviceId}/video_quality，让平台数据库与 App 一致
+     *
+     * 平台远程下发走 [applyPush]，本地修改走这里 — 两条入口共享同一份 _config 真源。
+     */
+    fun applyLocalVideoChange(resolution: String, fps: Int, bitrateKbps: Int) {
+        val merged = _config.value.copy(
+            videoResolution = resolution,
+            videoFps = fps,
+            videoBitrateKbps = bitrateKbps,
+            version = _config.value.version + 1,
+            lastPushAt = System.currentTimeMillis()
+        )
+        _config.value = merged
+        saveToPrefs(merged)
+        Timber.i("本地视频参数变更: ${resolution}@${fps}fps/${bitrateKbps}kbps, version=${merged.version}")
+        syncVideoQualityToPlatform(resolution, fps, bitrateKbps)
+    }
+
+    private fun syncVideoQualityToPlatform(resolution: String, fps: Int, bitrateKbps: Int) {
+        if (settings.platformApiUrl.isEmpty() || settings.deviceId.isEmpty()) {
+            Timber.w("本地视频参数同步跳过: platformApiUrl 或 deviceId 未配置")
+            return
+        }
+        scope.launch {
+            try {
+                val body = """{"value":{"resolution":"$resolution","fps":$fps,"bitrate":$bitrateKbps}}"""
+                    .toRequestBody("application/json".toMediaType())
+                val req = Request.Builder()
+                    .url("${settings.platformApiUrl}/api/device-config/${settings.deviceId}/video_quality")
+                    .put(body)
+                    .build()
+                httpClient.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        Timber.i("本地视频参数已同步到平台: ${resolution}@${fps}fps/${bitrateKbps}kbps")
+                    } else {
+                        Timber.w("本地视频参数同步失败: http=${resp.code}")
+                    }
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "本地视频参数同步异常")
+            }
+        }
+    }
+
     /** 处理 ConfigPush 事件原始 JSON。*/
     fun applyPush(raw: JSONObject) {
         try {

@@ -44,14 +44,6 @@ class AppSettings(private val prefs: SharedPreferences) {
         get() = prefs.getString("network_pref", "wifi") ?: "wifi"
         set(v) = prefs.edit().putString("network_pref", v).apply()
 
-    var videoResolution: String
-        get() = prefs.getString("video_resolution", "1080P") ?: "1080P"
-        set(v) = prefs.edit().putString("video_resolution", v).apply()
-
-    var videoBitrate: Int
-        get() = prefs.getInt("video_bitrate", 2048)
-        set(v) = prefs.edit().putInt("video_bitrate", v).apply()
-
     /** 录像分片时长（分钟），本地设置。远程配置优先覆盖。 */
     var recordingSegmentMinutes: Int
         get() = prefs.getInt("recording_segment_minutes", 5)

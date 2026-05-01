@@ -481,11 +481,14 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         }
         findViewById<TextView>(R.id.tvDeviceId).text = displayCode
 
-        val resolution = settings.videoResolution
-        val bitrate = settings.videoBitrate
-        findViewById<TextView>(R.id.tvEncoding).text = "H264 $resolution ${bitrate}k"
+        // 编码参数读 RemoteConfig（与 Camera2Preview 实际使用的同一真源），
+        // 不再用 settings.videoResolution/videoBitrate（已删除）
+        val cfg = (application as EnforcementApp).remoteConfigManager.config.value
+        val resolution = cfg.videoResolution
+        val bitrate = cfg.videoBitrateKbps
+        findViewById<TextView>(R.id.tvEncoding).text = "H264 $resolution @${cfg.videoFps}fps ${bitrate}k"
 
-        Timber.i("设备信息加载: customCode=$displayCode, sipDeviceId=${settings.deviceId}, sipServer=${settings.sipServer}:${settings.sipPort}, resolution=$resolution, bitrate=${bitrate}k")
+        Timber.i("设备信息加载: customCode=$displayCode, sipDeviceId=${settings.deviceId}, sipServer=${settings.sipServer}:${settings.sipPort}, resolution=$resolution, fps=${cfg.videoFps}, bitrate=${bitrate}k")
 
         updateStorageInfo()
     }
