@@ -12,8 +12,8 @@ android {
         applicationId = "com.hdcollection.enforcement"
         minSdk = 25
         targetSdk = 36
-        versionCode = 18
-        versionName = "1.0.17"
+        versionCode = 19
+        versionName = "1.0.18"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // 远程升级零现场配置兜底：卸载重装后 SharedPreferences 全清，App 启动时
