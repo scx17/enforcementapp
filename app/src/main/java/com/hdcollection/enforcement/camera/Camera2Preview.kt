@@ -60,10 +60,15 @@ class Camera2Preview(private val context: Context) {
      */
     /**
      * 选取最接近目标帧率的 AE_TARGET_FPS_RANGE。
-     * 优先级：
-     *   1. 等于 [target, target] 的精确锁定（最稳）
-     *   2. 包含 target 且 lower 最接近 target 的 range（防止暗光降帧）
-     *   3. null（用默认 range，通常 [7, 30]）
+     *
+     * 关键：lower bound 决定 AE 允许的最长曝光时间（1/lower 秒）。
+     * lower 太低（如 [7, 30] → 1/7s 曝光）会导致运动模糊严重，看起来像卡顿。
+     *
+     * 优先级（确保短曝光，避免拖影）：
+     *   1. 精确锁定 [target, target]（最稳）
+     *   2. lower >= target 且 upper >= target，upper 最接近 target（曝光最短）
+     *   3. lower < target 但 lower 最高 — fallback，可能拖影但帧率稳
+     *   4. null — 不设置，用 HAL 默认（系统自适应）
      */
     private fun pickFpsRange(target: Int): android.util.Range<Int>? {
         return try {
@@ -76,11 +81,17 @@ class Camera2Preview(private val context: Context) {
             val ranges = cm.getCameraCharacteristics(targetId)
                 .get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
                 ?: return null
-            // 1. 精确锁定 [target, target]
+            Timber.i("摄像头可用 AE fps ranges: ${ranges.joinToString()}")
+            // 1. 精确锁定
             ranges.firstOrNull { it.lower == target && it.upper == target }?.let { return it }
-            // 2. 包含 target 且 lower 最高（防止暗光降帧）
-            ranges.filter { it.lower <= target && it.upper >= target }
-                .maxByOrNull { it.lower }
+            // 2. lower >= target（曝光足够短，无拖影），upper 越接近 target 越好
+            ranges.filter { it.lower >= target && it.upper >= target }
+                .minByOrNull { it.upper - target + (it.lower - target) }
+                ?.let { return it }
+            // 3. fallback：找不到 lower >= target 的，返回 null 不设 — HAL 默认 AE
+            //    比硬选 [7, 30] 这种长曝光 range 强，至少没拖影
+            Timber.w("没有 lower>=$target 的 fps range，不锁定，用 HAL 默认（避免长曝光拖影）")
+            null
         } catch (e: Exception) {
             Timber.w(e, "查询 AE fps range 失败")
             null
