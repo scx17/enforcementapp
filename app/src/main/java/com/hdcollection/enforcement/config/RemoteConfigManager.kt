@@ -119,7 +119,8 @@ class RemoteConfigManager(
                 val body = """{"value":{"resolution":"$resolution","fps":$fps,"bitrate":$bitrateKbps}}"""
                     .toRequestBody("application/json".toMediaType())
                 val req = Request.Builder()
-                    .url("${settings.platformApiUrl}/api/device-config/${settings.deviceId}/video_quality")
+                    // source=app 让后端跳过自动推送，避免 App→PUT→ConfigPush→App 回环
+                    .url("${settings.platformApiUrl}/api/device-config/${settings.deviceId}/video_quality?source=app")
                     .put(body)
                     .build()
                 httpClient.newCall(req).execute().use { resp ->
