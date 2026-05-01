@@ -30,7 +30,7 @@ class GeneralSettingsFragment : Fragment() {
         "1440P (2560x1440)"
     )
     private val resolutionValues = listOf("640x360", "720x480", "1280x720", "1920x1080", "2560x1440")
-    private val fpsValues = listOf(15, 20, 25, 30)
+    private val fpsValues = listOf(10, 15, 20, 25, 30)
     private val bitrateLabels = listOf(
         "512 kbps (流畅)",
         "1024 kbps (标清)",

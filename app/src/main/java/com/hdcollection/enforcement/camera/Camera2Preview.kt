@@ -416,6 +416,13 @@ class Camera2Preview(private val context: Context) {
 
         Timber.i("编码输出线程启动")
         encoderThread = Thread {
+            // 提升编码输出线程优先级：低端 CPU（msm8953 等）默认线程优先级被系统服务抢占，
+            // 偶发几百毫秒不出帧导致客户端缓冲耗尽卡顿。URGENT_AUDIO 是 -19，仅次于 RT。
+            try {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+            } catch (e: Exception) {
+                Timber.w(e, "提升编码线程优先级失败")
+            }
             val bufferInfo = MediaCodec.BufferInfo()
             while (isEncoding) {
                 try {

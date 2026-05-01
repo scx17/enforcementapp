@@ -165,6 +165,15 @@
             </intent-filter>
         </receiver>
 
+        <!-- adb 远程夜视开关：用 am broadcast 触发 IR_LIGHT action 控制红外灯 -->
+        <receiver
+            android:name=".receiver.IrLightReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.hdcollection.enforcement.IR_LIGHT" />
+            </intent-filter>
+        </receiver>
+
     </application>
 
 </manifest>
