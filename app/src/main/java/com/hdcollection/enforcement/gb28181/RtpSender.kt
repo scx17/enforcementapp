@@ -30,6 +30,14 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
     private var packetCount = 0L
     private var byteCount = 0L
 
+    // RTP pacing：大帧（IDR 等）分散在帧间隔内发送，避免老 WiFi 上行被 burst 突发丢包。
+    // App 通过 setFrameRate() 告诉 sender 当前帧率，pacing 才能算出每帧多少时间窗。
+    @Volatile private var frameIntervalNs: Long = 100_000_000L  // 默认 10fps = 100ms
+
+    fun setFrameRate(fps: Int) {
+        if (fps > 0) frameIntervalNs = 1_000_000_000L / fps
+    }
+
     // 音频队列：音频编码线程入队，视频线程出队发送（无锁）
     private val audioQueue = ConcurrentLinkedQueue<Pair<ByteArray, Long>>()
 
@@ -102,6 +110,14 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
         var offset = 0
         val addr = targetAddr ?: return
 
+        // 计算包数 + pacing 间隔。包数少（≤6，普通 P 帧）直接 burst（pacing 反而增加延迟）；
+        // 包数多（IDR 等大帧）按 帧间隔 60% / 包数 分散发送，留 40% 给后续帧编码。
+        val totalPackets = (data.size + mtu - 1) / mtu
+        val useInterPacketDelay = totalPackets > 6
+        val interPacketNs = if (useInterPacketDelay) {
+            (frameIntervalNs * 6 / 10) / totalPackets
+        } else 0L
+
         while (offset < data.size) {
             val chunkSize = minOf(mtu, data.size - offset)
             val marker = (offset + chunkSize >= data.size)
@@ -126,11 +142,16 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
             packetCount++
             byteCount += rtp.size
             if (packetCount % 200 == 1L) {
-                Timber.i("RtpSender: sent $packetCount pkts, ${byteCount/1024}KB → $targetIp:$targetPort")
+                Timber.i("RtpSender: sent $packetCount pkts, ${byteCount/1024}KB → $targetIp:$targetPort, paced=$useInterPacketDelay")
             }
 
             offset += chunkSize
             sequenceNumber = (sequenceNumber + 1) and 0xFFFF
+
+            // pacing：包间 micro-sleep 让 WiFi 上行有空隙吞包，不被 burst 撑爆
+            if (interPacketNs > 0 && offset < data.size) {
+                java.util.concurrent.locks.LockSupport.parkNanos(interPacketNs)
+            }
         }
     }
 

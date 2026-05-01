@@ -372,9 +372,10 @@ class Camera2Preview(private val context: Context) {
             mediaCodec = codec
             encoderSurface = encSurface
 
-            // 启动 RTP 发送（使用 SDP 指定的 SSRC）
+            // 启动 RTP 发送（使用 SDP 指定的 SSRC + 设置帧率让 pacing 正确分配包间延迟）
             val sender = RtpSender(rtpIp, rtpPort)
             if (ssrc != 0) sender.setSsrc(ssrc)
+            sender.setFrameRate(encFps)
             sender.start()
             rtpSender = sender
 
