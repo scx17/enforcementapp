@@ -57,9 +57,13 @@ class AppSettings(private val prefs: SharedPreferences) {
         get() = prefs.getInt("recording_segment_minutes", 5)
         set(v) = prefs.edit().putInt("recording_segment_minutes", v).apply()
 
-    /** 本地 SIP 监听端口（默认 5060）。当两台设备共用同一 NAT/SIP ALG 路由器时，
-     *  可将其中一台改为其他端口（如 15060）以避免 SIP ALG 冲突。 */
+    /** 本地 SIP 监听端口(默认 5070,非 5060)。
+     *  原因:Android 7-9 系统自带 android.net.sip.SipService 抢占 UDP 5060,
+     *  我们 App socket bind 5060 时虽然不报错(SO_REUSEPORT 共享),但 inbound 包
+     *  会被内核优先送给系统服务,我们 receive 永远拿不到 WVP 响应 → SIP 永远注册不上。
+     *  改非标 5070 完全规避这个冲突;Android 10+ 系统已废弃 SipService 不影响。
+     *  发往 WVP 的端口仍是 sipPort(默认 5060),NAT 回包按映射端口走,不依赖本地 bind 端口。 */
     var sipLocalPort: Int
-        get() = prefs.getInt("sip_local_port", 5060)
+        get() = prefs.getInt("sip_local_port", 5070)
         set(v) = prefs.edit().putInt("sip_local_port", v).apply()
 }
