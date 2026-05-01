@@ -382,8 +382,16 @@ class Camera2Preview(private val context: Context) {
         }
 
         try {
-            val (rawW, rawH, encFps) = resolveVideoParams()
+            val (rawW, rawH, targetFps) = resolveVideoParams()
             val (encW, encH) = ensureSupportedEncoderSize(rawW, rawH)
+            // 关键：摄像头 fps range 与编码 fps 必须匹配，否则 OMX.qcom.video.encoder.avc
+            // （BT280T 高通老编码器）在 input/output fps 不一致时偶发 hang 数秒（实测 8.9s 阻塞）。
+            // 先选 fps range，再用 range.lower 作为实际编码 fps（保证输入输出帧率相同）。
+            val targetFpsRange = pickFpsRange(targetFps)
+            val encFps = targetFpsRange?.lower?.coerceAtLeast(targetFps) ?: targetFps
+            if (encFps != targetFps) {
+                Timber.w("编码 fps 由 $targetFps 调整为 $encFps 以匹配摄像头 fps range $targetFpsRange，避免 OMX 编码器 hang")
+            }
             val encBitrateBps = resolveVideoBitrateBps()
             // 创建 MediaCodec H.264 编码器（低延迟配置）
             // GOP = 1 秒：丢帧后 IDR 间隔短，移动场景马赛克恢复快（开销 ~10% 码率）
@@ -427,11 +435,6 @@ class Camera2Preview(private val context: Context) {
             surfaces.add(encSurface)
             recSurfaceAtStart?.let { surfaces.add(it) }
             imageReader?.surface?.let { surfaces.add(it) }
-
-            // 选取最接近目标帧率的 AE_TARGET_FPS_RANGE，锁定摄像头输出帧率
-            // 不锁定时摄像头会用变长 range（如 [7, 30]），暗光下自动降到 7fps，
-            // 客户端缓冲忽空忽满 → 卡顿。锁定到固定值后摄像头会用更长曝光维持帧率。
-            val targetFpsRange = pickFpsRange(encFps)
 
             camera.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
