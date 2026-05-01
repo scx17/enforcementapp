@@ -24,12 +24,12 @@ class GeneralSettingsFragment : Fragment() {
     // RemoteConfig（resolution = "1280x720" 长格式）保持双向同步。
     private val resolutionLabels = listOf(
         "360P (640x360)",
-        "480P (848x480)",
+        "480P (720x480)",
         "720P (1280x720)",
         "1080P (1920x1080)",
         "1440P (2560x1440)"
     )
-    private val resolutionValues = listOf("640x360", "848x480", "1280x720", "1920x1080", "2560x1440")
+    private val resolutionValues = listOf("640x360", "720x480", "1280x720", "1920x1080", "2560x1440")
     private val fpsValues = listOf(15, 20, 25, 30)
     private val bitrateLabels = listOf(
         "512 kbps (流畅)",

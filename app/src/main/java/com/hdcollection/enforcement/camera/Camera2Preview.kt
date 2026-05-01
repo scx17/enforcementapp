@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
@@ -47,6 +48,41 @@ class Camera2Preview(private val context: Context) {
         val app = context.applicationContext as? com.hdcollection.enforcement.EnforcementApp
         val kbps = app?.remoteConfigManager?.config?.value?.videoBitrateKbps ?: 2000
         return kbps * 1000
+    }
+
+    /**
+     * 校验编码器目标尺寸是否在当前摄像头支持的输出尺寸列表里。
+     * 不支持时按优先级回退：1280x720 → 1920x1080 → 摄像头最大尺寸 → 1280x720（兜底）。
+     *
+     * 老机型（BT280T/SDJW_F2S 等）的 Camera2 HAL 不接受 848x480 之类的非标准尺寸，
+     * 不预先校验直接 createCaptureSession 会失败 ("Unsupported set of inputs/outputs")，
+     * 编码器接不上数据，App 显示推流中但平台拉不到流。
+     */
+    private fun ensureSupportedEncoderSize(w: Int, h: Int): Pair<Int, Int> {
+        return try {
+            val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val ids = cm.cameraIdList
+            val targetFacing = if (useFrontCamera) CameraCharacteristics.LENS_FACING_FRONT
+                else CameraCharacteristics.LENS_FACING_BACK
+            val targetId = ids.firstOrNull {
+                cm.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == targetFacing
+            } ?: ids.first()
+            val map = cm.getCameraCharacteristics(targetId)
+                .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            val sizes = map?.getOutputSizes(MediaCodec::class.java) ?: emptyArray()
+            if (sizes.any { it.width == w && it.height == h }) {
+                Pair(w, h)
+            } else {
+                val fb = sizes.firstOrNull { it.width == 1280 && it.height == 720 }
+                    ?: sizes.firstOrNull { it.width == 1920 && it.height == 1080 }
+                    ?: sizes.maxByOrNull { it.width.toLong() * it.height }
+                Timber.w("摄像头不支持编码尺寸 ${w}x${h}，回退到 ${fb?.width}x${fb?.height}（支持列表共 ${sizes.size} 项）")
+                fb?.let { Pair(it.width, it.height) } ?: Pair(1280, 720)
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "查询摄像头支持尺寸失败，使用 1280x720 兜底")
+            Pair(1280, 720)
+        }
     }
 
     private var cameraDevice: CameraDevice? = null
@@ -306,7 +342,8 @@ class Camera2Preview(private val context: Context) {
         }
 
         try {
-            val (encW, encH, encFps) = resolveVideoParams()
+            val (rawW, rawH, encFps) = resolveVideoParams()
+            val (encW, encH) = ensureSupportedEncoderSize(rawW, rawH)
             val encBitrateBps = resolveVideoBitrateBps()
             // 创建 MediaCodec H.264 编码器（低延迟配置）
             // GOP = 1 秒：丢帧后 IDR 间隔短，移动场景马赛克恢复快（开销 ~10% 码率）
@@ -531,7 +568,10 @@ class Camera2Preview(private val context: Context) {
      */
     fun applyVideoConfigIfChanged() {
         if (!isEncoding) return
-        val (newW, newH, newFps) = resolveVideoParams()
+        val (rawW, rawH, newFps) = resolveVideoParams()
+        // 用 fallback 后的实际尺寸做相等判断，避免推 848x480 之类不支持尺寸时
+        // 永远不等于当前 1280x720 而无限触发重启
+        val (newW, newH) = ensureSupportedEncoderSize(rawW, rawH)
         val newBitrateBps = resolveVideoBitrateBps()
         val mc = mediaCodec
         if (mc != null) {
