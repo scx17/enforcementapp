@@ -134,6 +134,9 @@ class EnforcementApp : Application() {
         remoteConfigManager = RemoteConfigManager(this, settings)
         Timber.i("RemoteConfigManager 初始化完成: version=${remoteConfigManager.config.value.version}")
 
+        // 上报硬件 profile，平台据此显示设备硬件分级与推荐配置
+        com.hdcollection.enforcement.config.HardwareProfileReporter.reportAsync(this, settings)
+
         // 初始化 SignalR 平台通知
         notificationService = PlatformNotificationService(this, settings)
         notificationService.onConfigPushReceived = { json ->
