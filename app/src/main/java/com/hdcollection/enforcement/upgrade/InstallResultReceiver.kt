@@ -38,8 +38,18 @@ class InstallResultReceiver : BroadcastReceiver() {
                 report(context, "install_pending_user", msg)
             }
             PackageInstaller.STATUS_SUCCESS -> {
-                Timber.i("InstallResult: 安装成功")
+                Timber.i("InstallResult: 安装成功，自动拉起 MainActivity")
                 report(context, "install_success", null)
+                // OTA 静默安装完成后主动 launch — 否则 app 进入 stopped state，
+                // 后续 reboot 时 BOOT_COMPLETED 不会送给 stopped 的 app，开机自启动失效
+                try {
+                    val intent = Intent(context, com.hdcollection.enforcement.ui.main.MainActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(intent)
+                } catch (t: Throwable) {
+                    Timber.e(t, "InstallResult: 安装成功后启动 MainActivity 失败")
+                }
             }
             else -> {
                 val event = "install_failed"

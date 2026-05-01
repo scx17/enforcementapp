@@ -140,6 +140,28 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // 锁屏穿透 + 屏幕唤醒 — reboot 后 BootReceiver 启动本 Activity 时屏幕通常
+        // 处于锁屏 / 休眠状态，没这些 flag 用户看不到 App 界面（在锁屏后面跑）
+        if (android.os.Build.VERSION.SDK_INT >= 27) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            )
+        }
+        // Device Owner 主动 dismiss keyguard（执法仪不需要锁屏）
+        try {
+            val km = getSystemService(android.content.Context.KEYGUARD_SERVICE) as android.app.KeyguardManager
+            if (android.os.Build.VERSION.SDK_INT >= 26 && km.isKeyguardLocked) {
+                km.requestDismissKeyguard(this, null)
+            }
+        } catch (e: Throwable) {
+            Timber.w(e, "requestDismissKeyguard 失败")
+        }
+
         // 保持屏幕常亮 + WakeLock 防止 CPU 休眠
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
