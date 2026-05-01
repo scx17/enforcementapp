@@ -170,6 +170,10 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             Timber.w("设备未配置，跳转设置页")
             isNavigatingInternally = true
             startActivity(Intent(this, SettingsActivity::class.java))
+            // 必须 finish 自己——否则用户在设置页按 BACK 不保存就退回，
+            // MainActivity 还在栈里但 setupBottomButtons / MediaCaptureService 都没初始化，
+            // 表象是"黑屏 + 点击无反应",而 onResume 又不会重新跑 onCreate。
+            finish()
             return
         }
 
