@@ -4,10 +4,15 @@ import android.os.Bundle
 import android.view.*
 import android.widget.*
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.hdcollection.enforcement.EnforcementApp
 import com.hdcollection.enforcement.R
+import com.hdcollection.enforcement.config.RemoteConfig
 import com.hdcollection.enforcement.data.AppSettings
 import com.hdcollection.enforcement.databinding.FragmentSettingsGeneralBinding
+import kotlinx.coroutines.launch
 
 class GeneralSettingsFragment : Fragment() {
     private var _binding: FragmentSettingsGeneralBinding? = null
@@ -40,23 +45,25 @@ class GeneralSettingsFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         settings = AppSettings(requireContext().getSharedPreferences("app_settings", 0))
         val app = requireContext().applicationContext as EnforcementApp
-        val cfg = app.remoteConfigManager.config.value
 
         binding.spinnerResolution.adapter = makeAdapter(resolutionLabels)
-        binding.spinnerResolution.setSelection(resolutionValues.indexOf(cfg.videoResolution).coerceAtLeast(0))
-
         binding.spinnerFps.adapter = makeAdapter(fpsValues.map { "$it fps" })
-        binding.spinnerFps.setSelection(fpsValues.indexOf(cfg.videoFps).coerceAtLeast(0))
-
         binding.spinnerBitrate.adapter = makeAdapter(bitrateLabels)
-        binding.spinnerBitrate.setSelection(
-            bitrateValues.indexOf(cfg.videoBitrateKbps).let { if (it < 0) bitrateValues.indexOf(2048) else it }
-        )
-
         binding.spinnerSegment.adapter = makeAdapter(segmentOptions)
+
+        // 录像分段是本地设置（不在 RemoteConfig 里），只初始化一次
         binding.spinnerSegment.setSelection(
             segmentValues.indexOf(settings.recordingSegmentMinutes).coerceAtLeast(0)
         )
+
+        // 监听 RemoteConfig StateFlow：平台推送 / 自身保存后 UI 自动刷新
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                app.remoteConfigManager.config.collect { cfg ->
+                    applyConfigToUi(cfg)
+                }
+            }
+        }
 
         binding.btnSaveGeneral.setOnClickListener {
             val resolution = resolutionValues[binding.spinnerResolution.selectedItemPosition]
@@ -66,6 +73,22 @@ class GeneralSettingsFragment : Fragment() {
             // 视频参数走 RemoteConfigManager —— 自动持久化 + 同步平台 + 触发编码器热重启
             app.remoteConfigManager.applyLocalVideoChange(resolution, fps, bitrate)
             Toast.makeText(context, "通用配置已保存（视频参数已同步到平台）", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun applyConfigToUi(cfg: RemoteConfig) {
+        val resIdx = resolutionValues.indexOf(cfg.videoResolution).coerceAtLeast(0)
+        if (binding.spinnerResolution.selectedItemPosition != resIdx) {
+            binding.spinnerResolution.setSelection(resIdx)
+        }
+        val fpsIdx = fpsValues.indexOf(cfg.videoFps).coerceAtLeast(0)
+        if (binding.spinnerFps.selectedItemPosition != fpsIdx) {
+            binding.spinnerFps.setSelection(fpsIdx)
+        }
+        val brIdx = bitrateValues.indexOf(cfg.videoBitrateKbps)
+            .let { if (it < 0) bitrateValues.indexOf(2048) else it }
+        if (binding.spinnerBitrate.selectedItemPosition != brIdx) {
+            binding.spinnerBitrate.setSelection(brIdx)
         }
     }
 

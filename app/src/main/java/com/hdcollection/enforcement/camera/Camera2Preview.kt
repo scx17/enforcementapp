@@ -309,26 +309,47 @@ class Camera2Preview(private val context: Context) {
             val (encW, encH, encFps) = resolveVideoParams()
             val encBitrateBps = resolveVideoBitrateBps()
             // 创建 MediaCodec H.264 编码器（低延迟配置）
-            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, encW, encH).apply {
+            // GOP = 1 秒：丢帧后 IDR 间隔短，移动场景马赛克恢复快（开销 ~10% 码率）
+            // Main Profile + CABAC 比 Baseline 提升 ~10-15% 压缩率（低码率下抑制马赛克最有效）
+            // Profile 设置失败时回退 Baseline，保证老编码器兼容
+            fun buildFormat(profile: Int, level: Int) = MediaFormat.createVideoFormat(
+                MediaFormat.MIMETYPE_VIDEO_AVC, encW, encH
+            ).apply {
                 setInteger(MediaFormat.KEY_BIT_RATE, encBitrateBps)
                 setInteger(MediaFormat.KEY_FRAME_RATE, encFps)
-                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
                 setInteger(MediaFormat.KEY_COLOR_FORMAT,
                     MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                // 低延迟优化
                 setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
-                setInteger(MediaFormat.KEY_COMPLEXITY, 0) // 最低复杂度，编码更快
+                setInteger(MediaFormat.KEY_COMPLEXITY, 0)
                 try {
-                    setInteger(MediaFormat.KEY_LATENCY, 0) // API 30+ 低延迟
-                    setInteger("vendor.rtc-ext-enc-low-latency.enable", 1) // MTK 低延迟
+                    setInteger(MediaFormat.KEY_LATENCY, 0)
+                    setInteger("vendor.rtc-ext-enc-low-latency.enable", 1)
                 } catch (_: Exception) {}
-                // H264 Baseline Profile 编码最快
-                setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
-                setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel31)
+                setInteger(MediaFormat.KEY_PROFILE, profile)
+                setInteger(MediaFormat.KEY_LEVEL, level)
             }
-            Timber.i("编码参数: 分辨率=${encW}x${encH}, 码率=${encBitrateBps/1000}kbps, 帧率=${encFps}fps, Profile=Baseline, CBR模式")
+
             val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            var profileLabel: String
+            try {
+                val format = buildFormat(
+                    MediaCodecInfo.CodecProfileLevel.AVCProfileMain,
+                    MediaCodecInfo.CodecProfileLevel.AVCLevel41
+                )
+                codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                profileLabel = "Main@4.1"
+            } catch (e: Exception) {
+                Timber.w("Main Profile 配置失败，回退 Baseline: ${e.message}")
+                codec.reset()
+                val format = buildFormat(
+                    MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline,
+                    MediaCodecInfo.CodecProfileLevel.AVCLevel31
+                )
+                codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                profileLabel = "Baseline@3.1"
+            }
+            Timber.i("编码参数: 分辨率=${encW}x${encH}, 码率=${encBitrateBps/1000}kbps, 帧率=${encFps}fps, GOP=1s, Profile=$profileLabel, CBR模式")
             val encSurface = codec.createInputSurface()
             codec.start()
             mediaCodec = codec
