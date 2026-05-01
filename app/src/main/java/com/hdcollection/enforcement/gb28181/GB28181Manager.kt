@@ -53,7 +53,18 @@ class GB28181Manager(
                     System.setProperty("java.net.preferIPv4Stack", "true")
                     // 绑定到设备的 WiFi IPv4 地址
                     val bindAddr = java.net.Inet4Address.getByName(localIp)
-                    udpSocket = DatagramSocket(localPort, bindAddr)
+                    Timber.i("GB28181: 尝试 bind $localIp:$localPort (settings.sipLocalPort)")
+                    // 端口冲突 fallback:5060/5070 等指定端口被系统服务(如 Android 7 SipService)
+                    // 占用时,DatagramSocket 抛 BindException。让 OS 分配随机高位端口,
+                    // 完全规避冲突。WVP 端按 NAT 映射端口回包,与本地端口选什么无关。
+                    udpSocket = try {
+                        DatagramSocket(localPort, bindAddr)
+                    } catch (be: java.net.BindException) {
+                        Timber.w(be, "GB28181: bind $localPort 失败,fallback 到随机高位端口")
+                        DatagramSocket(0, bindAddr).also {
+                            Timber.i("GB28181: fallback random port = ${it.localPort}")
+                        }
+                    }
                     boundNetwork?.let { net ->
                         try { net.bindSocket(udpSocket!!); Timber.i("GB28181: socket 已绑定到网络 $net") }
                         catch (e: Throwable) { Timber.w("GB28181: bindSocket 失败: ${e.message}") }
