@@ -174,8 +174,13 @@ class ServerSettingsFragment : Fragment() {
                 if (!root.get("success").asBoolean) {
                     val reason = root.get("reason")?.asString ?: ""
                     if (reason == "already_used") {
+                        // O2: 不抛异常,申请已自动上报到后台 sys_customcode_conflict 表。
+                        // 后台轮询每 60s 重试 /api/device/config —— 等管理员一键接管后,
+                        // 同一 IMEI 调 SubmitDeviceConfig 会走 existing 复用路径成功。
                         val suggestion = root.get("suggestion")?.asString
-                        throw Exception("编号已被占用" + if (suggestion != null) "，建议: $suggestion" else "")
+                        Timber.w("编号 $customCode 已被占用,申请已上报后台,启动 5 分钟轮询等管理员接管 (suggestion=$suggestion)")
+                        startWaitingForApproval(apiUrl, customCode, triggerSipReload, alsoFinishSave)
+                        return@Thread
                     }
                     throw Exception(root.get("message")?.asString ?: "服务器返回失败")
                 }
@@ -226,6 +231,77 @@ class ServerSettingsFragment : Fragment() {
                 }
             }
         }.start()
+    }
+
+    // O2: already_used 后台轮询状态
+    private val approvalHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var approvalRunnable: Runnable? = null
+    private var approvalDeadline: Long = 0
+
+    /**
+     * 申请的 customCode 被占用 → 进入"等管理员一键接管"状态:
+     * - UI 切到禁用 + 显示"已上报,等管理员处理(5 分钟内自动完成)"
+     * - 每 60 秒重试 /api/device/config 一次,管理员接管后同 IMEI 走 existing 复用即成功
+     * - 5 分钟到期还没接管 → 复原 UI 提示用户换编号或联系管理员
+     */
+    private fun startWaitingForApproval(
+        apiUrl: String, customCode: String,
+        triggerSipReload: Boolean, alsoFinishSave: Boolean
+    ) {
+        // 已经在等了不重复启动
+        if (approvalRunnable != null) return
+        approvalDeadline = System.currentTimeMillis() + 5 * 60 * 1000L
+
+        activity?.runOnUiThread {
+            if (!isAdded) return@runOnUiThread
+            binding.btnAutoConfig.isEnabled = false
+            binding.btnAutoConfig.text = "等待管理员处理(最多 5 分钟)..."
+            binding.btnSave.isEnabled = false
+            Toast.makeText(
+                context,
+                "编号已被占用,申请已上报后台\n管理员接管后将自动完成配置,最多等 5 分钟",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+
+        val r = object : Runnable {
+            override fun run() {
+                if (!isAdded) {
+                    Timber.d("startWaitingForApproval: Fragment 已脱离,停止轮询")
+                    approvalRunnable = null
+                    return
+                }
+                if (System.currentTimeMillis() > approvalDeadline) {
+                    Timber.w("startWaitingForApproval: 5 分钟超时,管理员未处理")
+                    approvalRunnable = null
+                    activity?.runOnUiThread {
+                        if (!isAdded) return@runOnUiThread
+                        binding.btnAutoConfig.isEnabled = true
+                        binding.btnAutoConfig.text = "重新申请"
+                        binding.btnSave.isEnabled = true
+                        Toast.makeText(
+                            context,
+                            "管理员未在 5 分钟内处理,请联系管理员或更换编号",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                    return
+                }
+                Timber.i("startWaitingForApproval: 重试 /api/device/config")
+                // 直接复用 runAutoConfig — 内部如果还是 already_used 会再调 startWaitingForApproval,
+                // 但 approvalRunnable != null 时会直接 return 不重启,只把当前轮询继续走完。
+                // 为了避免嵌套,先清掉 approvalRunnable 让 runAutoConfig 进入"无等待"状态。
+                approvalRunnable = null
+                runAutoConfig(apiUrl, customCode, triggerSipReload, alsoFinishSave)
+            }
+        }
+        approvalRunnable = r
+        approvalHandler.postDelayed(r, 60_000L)  // 第一次 60 秒后重试
+    }
+
+    private fun cancelApprovalWaiting() {
+        approvalRunnable?.let { approvalHandler.removeCallbacks(it) }
+        approvalRunnable = null
     }
 
     /** 通知 MediaCaptureService 用最新配置重新注册 GB28181。*/
@@ -334,6 +410,7 @@ class ServerSettingsFragment : Fragment() {
 
     override fun onDestroyView() {
         codeCheckRunnable?.let { handler.removeCallbacks(it) }
+        cancelApprovalWaiting()
         super.onDestroyView()
         _binding = null
     }
