@@ -151,7 +151,7 @@ grep -E "versionCode|versionName" "$GRADLE_FILE" | head -2
 
 # ============ 构建 release APK ============
 echo "→ 构建 release APK..."
-./gradlew assembleRelease --no-daemon 2>&1 | tail -10
+./gradlew assembleRelease --no-daemon </dev/null 2>&1 | tail -10
 APK="$APP_DIR/app/build/outputs/apk/release/HdcEnforcement-v${VERSION_NAME}-vc${NEW_VC}.apk"
 if [[ ! -f "$APK" ]]; then
     echo "❌ 找不到产物 $APK" >&2
