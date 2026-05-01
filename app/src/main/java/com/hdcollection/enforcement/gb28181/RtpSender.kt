@@ -41,32 +41,52 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
     // 音频队列：音频编码线程入队，视频线程出队发送（无锁）
     private val audioQueue = ConcurrentLinkedQueue<Pair<ByteArray, Long>>()
 
+    // 复用 buffer：避免每个视频帧（特别是 IDR 70+ 包）频繁 alloc 触发 GC。
+    // 老 CPU (Cortex-A53) 上 GC 暂停几十毫秒，是卡顿的真正性能瓶颈。
+    private val rtpBuf = ByteArray(12 + 1400)             // 单个 RTP 包复用
+    private val rtpPacket = DatagramPacket(rtpBuf, rtpBuf.size)  // DatagramPacket 复用 (setSocketAddress 时创建)
+    // 自定义 BAOS 子类，暴露 internal buf 避免 toByteArray() 每帧 100KB+ copy
+    private class ReusableBaos(size: Int) : ByteArrayOutputStream(size) {
+        fun internalBuf(): ByteArray = buf
+    }
+    private val psBuf = ReusableBaos(128 * 1024)          // PS 封装 buffer 复用
+    private val frameMergeBuf = ByteArray(256 * 1024)     // SPS/PPS + IDR 拼接复用 buffer
+
     fun start() {
         socket = DatagramSocket()
         targetAddr = InetAddress.getByName(targetIp)
+        rtpPacket.address = targetAddr
+        rtpPacket.port = targetPort
         packetCount = 0
         byteCount = 0
         audioQueue.clear()
         Timber.i("RtpSender: started target=$targetIp:$targetPort ssrc=$ssrc localPort=${socket?.localPort}")
     }
 
-    fun sendVideoFrame(encodedData: ByteArray, timestampMs: Long, isKeyFrame: Boolean = false) {
+    /**
+     * 发送视频帧。spsPpsPrefix 非空时表示 IDR 帧需要拼接 SPS/PPS — 直接在
+     * frameMergeBuf 拼接（不创建新数组）。
+     */
+    fun sendVideoFrame(encodedData: ByteArray, timestampMs: Long, isKeyFrame: Boolean = false, spsPpsPrefix: ByteArray? = null) {
         val sock = socket ?: return
         try {
             val timestamp = ((timestampMs % 0xFFFFFFFFL) * 90).toInt()
 
-            // GB28181 要求 PS 封装，但如果 PS 解析有问题可以切换
             if (USE_PS_ENCAPSULATION) {
-                val psData = packPs(encodedData, timestampMs, isKeyFrame)
-                if (isKeyFrame) {
-                    // 打印关键帧 PS 包前 80 字节的 hex dump，用于调试 PS 格式
-                    val hexDump = psData.take(80).joinToString(" ") { String.format("%02X", it) }
-                    Timber.w("PS-DEBUG keyframe PS[${psData.size}B] H264[${encodedData.size}B]: $hexDump")
-                }
-                sendRtpFragments(sock, psData, timestamp)
+                packPsInto(psBuf, encodedData, timestampMs, isKeyFrame, spsPpsPrefix)
+                // 直接读 BAOS 内部 buf，避免 toByteArray() 每帧 100KB+ copy
+                sendRtpFragments(sock, psBuf.internalBuf(), psBuf.size(), timestamp)
             } else {
-                // 直接发送 H264 over RTP（RFC 6184, PT=96）
-                sendRtpFragments(sock, encodedData, timestamp)
+                if (spsPpsPrefix != null) {
+                    // 拼接到复用 buffer 而不是 spsPps + data 创建新数组
+                    val total = spsPpsPrefix.size + encodedData.size
+                    val merged = if (total <= frameMergeBuf.size) frameMergeBuf else ByteArray(total)
+                    System.arraycopy(spsPpsPrefix, 0, merged, 0, spsPpsPrefix.size)
+                    System.arraycopy(encodedData, 0, merged, spsPpsPrefix.size, encodedData.size)
+                    sendRtpFragments(sock, merged, total, timestamp)
+                } else {
+                    sendRtpFragments(sock, encodedData, encodedData.size, timestamp)
+                }
             }
         } catch (e: Exception) {
             Timber.e(e, "RtpSender: send error")
@@ -93,7 +113,7 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
                 val timestamp = ((timestampMs % 0xFFFFFFFFL) * 90).toInt()
                 val adtsData = addAdtsHeader(aacData)
                 val psData = packAudioPs(adtsData, timestampMs)
-                sendRtpFragments(sock, psData, timestamp)
+                sendRtpFragments(sock, psData, psData.size, timestamp)
             }
         } catch (e: Exception) {
             Timber.e(e, "RtpSender: audio flush error")
@@ -105,77 +125,74 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
         var USE_PS_ENCAPSULATION = true
     }
 
-    private fun sendRtpFragments(sock: DatagramSocket, data: ByteArray, timestamp: Int) {
+    /**
+     * 发送 RTP 分片。所有 buffer 都复用：rtpBuf + rtpPacket。
+     * 注意：先前尝试加 LockSupport.parkNanos 做 RTP pacing 在低端硬件上反而引起卡顿
+     * （nanos 精度只有 ~5ms，70 包 × 5ms = 350ms 阻塞编码线程，比一帧间隔还长）。
+     * 已撤回 — 老硬件不接受 micro-sleep。
+     */
+    private fun sendRtpFragments(sock: DatagramSocket, data: ByteArray, dataLen: Int, timestamp: Int) {
         val mtu = 1400
         var offset = 0
-        val addr = targetAddr ?: return
+        val buf = rtpBuf
+        val pkt = rtpPacket
 
-        // 计算包数 + pacing 间隔。包数少（≤6，普通 P 帧）直接 burst（pacing 反而增加延迟）；
-        // 包数多（IDR 等大帧）按 帧间隔 60% / 包数 分散发送，留 40% 给后续帧编码。
-        val totalPackets = (data.size + mtu - 1) / mtu
-        val useInterPacketDelay = totalPackets > 6
-        val interPacketNs = if (useInterPacketDelay) {
-            (frameIntervalNs * 6 / 10) / totalPackets
-        } else 0L
+        while (offset < dataLen) {
+            val chunkSize = minOf(mtu, dataLen - offset)
+            val marker = (offset + chunkSize >= dataLen)
+            val rtpLen = 12 + chunkSize
 
-        while (offset < data.size) {
-            val chunkSize = minOf(mtu, data.size - offset)
-            val marker = (offset + chunkSize >= data.size)
+            // RTP header（写入复用 buffer）
+            buf[0] = 0x80.toByte()
+            buf[1] = ((if (marker) 0x80 else 0) or payloadType).toByte()
+            buf[2] = (sequenceNumber shr 8).toByte()
+            buf[3] = (sequenceNumber and 0xFF).toByte()
+            buf[4] = (timestamp ushr 24).toByte()
+            buf[5] = (timestamp ushr 16).toByte()
+            buf[6] = (timestamp ushr 8).toByte()
+            buf[7] = (timestamp and 0xFF).toByte()
+            buf[8] = (ssrc ushr 24).toByte()
+            buf[9] = (ssrc ushr 16).toByte()
+            buf[10] = (ssrc ushr 8).toByte()
+            buf[11] = (ssrc and 0xFF).toByte()
 
-            val rtp = ByteArray(12 + chunkSize)
-            // RTP header
-            rtp[0] = 0x80.toByte()
-            rtp[1] = ((if (marker) 0x80 else 0) or payloadType).toByte()
-            rtp[2] = (sequenceNumber shr 8).toByte()
-            rtp[3] = (sequenceNumber and 0xFF).toByte()
-            rtp[4] = (timestamp ushr 24).toByte()
-            rtp[5] = (timestamp ushr 16).toByte()
-            rtp[6] = (timestamp ushr 8).toByte()
-            rtp[7] = (timestamp and 0xFF).toByte()
-            rtp[8] = (ssrc ushr 24).toByte()
-            rtp[9] = (ssrc ushr 16).toByte()
-            rtp[10] = (ssrc ushr 8).toByte()
-            rtp[11] = (ssrc and 0xFF).toByte()
+            System.arraycopy(data, offset, buf, 12, chunkSize)
 
-            System.arraycopy(data, offset, rtp, 12, chunkSize)
-            sock.send(DatagramPacket(rtp, rtp.size, addr, targetPort))
+            // 复用同一个 DatagramPacket：只调 setLength（target 已在 start() 设置）
+            pkt.length = rtpLen
+            sock.send(pkt)
+
             packetCount++
-            byteCount += rtp.size
-            if (packetCount % 200 == 1L) {
-                Timber.i("RtpSender: sent $packetCount pkts, ${byteCount/1024}KB → $targetIp:$targetPort, paced=$useInterPacketDelay")
+            byteCount += rtpLen
+            if (packetCount % 500 == 1L) {
+                Timber.i("RtpSender: sent $packetCount pkts, ${byteCount/1024}KB → $targetIp:$targetPort")
             }
 
             offset += chunkSize
             sequenceNumber = (sequenceNumber + 1) and 0xFFFF
-
-            // pacing：包间 micro-sleep 让 WiFi 上行有空隙吞包，不被 burst 撑爆
-            if (interPacketNs > 0 && offset < data.size) {
-                java.util.concurrent.locks.LockSupport.parkNanos(interPacketNs)
-            }
         }
     }
 
     /**
-     * 将 H.264 数据封装为 MPEG-2 PS 包
+     * 将 H.264 数据封装为 MPEG-2 PS 包，写入复用 BAOS（reset 后追加），
+     * 不创建新 byte[]。spsPpsPrefix 非空时直接拼接到 PES payload 前。
      */
-    private fun packPs(h264: ByteArray, timestampMs: Long, isKeyFrame: Boolean): ByteArray {
-        val out = ByteArrayOutputStream(h264.size + 200)
+    private fun packPsInto(out: ByteArrayOutputStream, h264: ByteArray, timestampMs: Long, isKeyFrame: Boolean, spsPpsPrefix: ByteArray?) {
+        out.reset()
         val scr = timestampMs * 90
         val pts = scr
 
-        // 1. PS Pack Header (14 bytes)
         writePsPackHeader(out, scr)
-
-        // 2. System Header + PSM (仅关键帧)
         if (isKeyFrame) {
             writePsSystemHeader(out)
             writePsm(out)
         }
-
-        // 3. PES (Video) - H264 数据必须包含 Annex-B startcode (00 00 00 01)
-        writePes(out, 0xE0, h264, pts)
-
-        return out.toByteArray()
+        // PES payload：可能是单段 h264，或 spsPps + h264 两段拼接
+        if (spsPpsPrefix != null) {
+            writePes2Seg(out, 0xE0, spsPpsPrefix, h264, pts)
+        } else {
+            writePes(out, 0xE0, h264, pts)
+        }
     }
 
     /**
@@ -295,6 +312,36 @@ class RtpSender(private val targetIp: String, private val targetPort: Int) {
 
             out.write(payload, offset, chunkSize)
             offset += chunkSize
+        }
+    }
+
+    /**
+     * PES 两段 payload（spsPps + h264）— 避免外层先拼成一个数组再写入
+     */
+    private fun writePes2Seg(out: ByteArrayOutputStream, streamId: Int, seg1: ByteArray, seg2: ByteArray, pts: Long) {
+        // 简单实现：两段总和 ≤ maxPesPayload 时一个 PES，否则分多个 PES
+        val totalLen = seg1.size + seg2.size
+        val maxPesPayload = 65500
+        if (totalLen <= maxPesPayload) {
+            out.write(0x00); out.write(0x00); out.write(0x01); out.write(streamId)
+            val ptsHeaderLen = 5
+            val pesOptHeaderLen = 3 + ptsHeaderLen
+            val pesDataLen = pesOptHeaderLen + totalLen
+            if (pesDataLen <= 65535) {
+                out.write((pesDataLen shr 8) and 0xFF); out.write(pesDataLen and 0xFF)
+            } else {
+                out.write(0x00); out.write(0x00)
+            }
+            out.write(0x80); out.write(0x80); out.write(ptsHeaderLen)
+            writePts(out, pts)
+            out.write(seg1, 0, seg1.size)
+            out.write(seg2, 0, seg2.size)
+        } else {
+            // 极少触发（单帧 > 64KB），fallback 到单段写法（先合并）
+            val merged = ByteArray(totalLen)
+            System.arraycopy(seg1, 0, merged, 0, seg1.size)
+            System.arraycopy(seg2, 0, merged, seg1.size, seg2.size)
+            writePes(out, streamId, merged, pts)
         }
     }
 

@@ -449,18 +449,15 @@ class Camera2Preview(private val context: Context) {
                         val isKeyFrame = bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
                         frameCount++
 
-                        // IDR 帧前拼接 SPS/PPS
-                        val frameData = if (isKeyFrame && spsPps != null) {
-                            Timber.i("Encoder: IDR #$frameCount (${data.size}B), SPS/PPS=${spsPps!!.size}B, pts=${bufferInfo.presentationTimeUs}")
-                            spsPps!! + data
-                        } else {
-                            if (frameCount <= 5 || frameCount % 50 == 0) {
-                                Timber.i("Encoder: P-frame #$frameCount (${data.size}B), pts=${bufferInfo.presentationTimeUs}")
-                            }
-                            data
+                        // IDR 帧由 sender 直接拼接 SPS/PPS 前缀（不再 spsPps + data 创建新数组）
+                        val prefix = if (isKeyFrame) spsPps else null
+                        if (isKeyFrame) {
+                            Timber.i("Encoder: IDR #$frameCount (${data.size}B), SPS/PPS=${spsPps?.size ?: 0}B, pts=${bufferInfo.presentationTimeUs}")
+                        } else if (frameCount <= 5 || frameCount % 50 == 0) {
+                            Timber.i("Encoder: P-frame #$frameCount (${data.size}B), pts=${bufferInfo.presentationTimeUs}")
                         }
 
-                        rtpSender?.sendVideoFrame(frameData, bufferInfo.presentationTimeUs / 1000, isKeyFrame)
+                        rtpSender?.sendVideoFrame(data, bufferInfo.presentationTimeUs / 1000, isKeyFrame, prefix)
                         rtpSender?.flushAudioQueue()  // 视频帧后刷出音频，避免锁竞争
                     } else if (index == MediaCodec.INFO_TRY_AGAIN_LATER) {
                         // 正常超时，继续
