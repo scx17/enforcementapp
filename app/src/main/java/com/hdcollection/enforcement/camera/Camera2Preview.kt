@@ -58,46 +58,6 @@ class Camera2Preview(private val context: Context) {
      * 不预先校验直接 createCaptureSession 会失败 ("Unsupported set of inputs/outputs")，
      * 编码器接不上数据，App 显示推流中但平台拉不到流。
      */
-    /**
-     * 选取最接近目标帧率的 AE_TARGET_FPS_RANGE。
-     *
-     * 关键：lower bound 决定 AE 允许的最长曝光时间（1/lower 秒）。
-     * lower 太低（如 [7, 30] → 1/7s 曝光）会导致运动模糊严重，看起来像卡顿。
-     *
-     * 优先级（确保短曝光，避免拖影）：
-     *   1. 精确锁定 [target, target]（最稳）
-     *   2. lower >= target 且 upper >= target，upper 最接近 target（曝光最短）
-     *   3. lower < target 但 lower 最高 — fallback，可能拖影但帧率稳
-     *   4. null — 不设置，用 HAL 默认（系统自适应）
-     */
-    private fun pickFpsRange(target: Int): android.util.Range<Int>? {
-        return try {
-            val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-            val targetFacing = if (useFrontCamera) CameraCharacteristics.LENS_FACING_FRONT
-                else CameraCharacteristics.LENS_FACING_BACK
-            val targetId = cm.cameraIdList.firstOrNull {
-                cm.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == targetFacing
-            } ?: return null
-            val ranges = cm.getCameraCharacteristics(targetId)
-                .get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-                ?: return null
-            Timber.i("摄像头可用 AE fps ranges: ${ranges.joinToString()}")
-            // 1. 精确锁定
-            ranges.firstOrNull { it.lower == target && it.upper == target }?.let { return it }
-            // 2. lower >= target（曝光足够短，无拖影），upper 越接近 target 越好
-            ranges.filter { it.lower >= target && it.upper >= target }
-                .minByOrNull { it.upper - target + (it.lower - target) }
-                ?.let { return it }
-            // 3. fallback：找不到 lower >= target 的，返回 null 不设 — HAL 默认 AE
-            //    比硬选 [7, 30] 这种长曝光 range 强，至少没拖影
-            Timber.w("没有 lower>=$target 的 fps range，不锁定，用 HAL 默认（避免长曝光拖影）")
-            null
-        } catch (e: Exception) {
-            Timber.w(e, "查询 AE fps range 失败")
-            null
-        }
-    }
-
     private fun ensureSupportedEncoderSize(w: Int, h: Int): Pair<Int, Int> {
         return try {
             val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -382,16 +342,8 @@ class Camera2Preview(private val context: Context) {
         }
 
         try {
-            val (rawW, rawH, targetFps) = resolveVideoParams()
+            val (rawW, rawH, encFps) = resolveVideoParams()
             val (encW, encH) = ensureSupportedEncoderSize(rawW, rawH)
-            // 关键：摄像头 fps range 与编码 fps 必须匹配，否则 OMX.qcom.video.encoder.avc
-            // （BT280T 高通老编码器）在 input/output fps 不一致时偶发 hang 数秒（实测 8.9s 阻塞）。
-            // 先选 fps range，再用 range.lower 作为实际编码 fps（保证输入输出帧率相同）。
-            val targetFpsRange = pickFpsRange(targetFps)
-            val encFps = targetFpsRange?.lower?.coerceAtLeast(targetFps) ?: targetFps
-            if (encFps != targetFps) {
-                Timber.w("编码 fps 由 $targetFps 调整为 $encFps 以匹配摄像头 fps range $targetFpsRange，避免 OMX 编码器 hang")
-            }
             val encBitrateBps = resolveVideoBitrateBps()
             // 创建 MediaCodec H.264 编码器（低延迟配置）
             // GOP = 1 秒：丢帧后 IDR 间隔短，移动场景马赛克恢复快（开销 ~10% 码率）
@@ -443,10 +395,12 @@ class Camera2Preview(private val context: Context) {
                         preview?.let { addTarget(it) }
                         addTarget(encSurface)
                         recSurfaceAtStart?.let { addTarget(it) }
-                        if (targetFpsRange != null) {
-                            set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, targetFpsRange)
-                            Timber.i("Camera fps range 锁定: $targetFpsRange")
-                        }
+                        // 不设 CONTROL_AE_TARGET_FPS_RANGE：让 HAL 默认 AE 算法在
+                        // 摄像头支持的范围内自动选最佳曝光（亮光短曝光、暗光长曝光），
+                        // 与编码器 KEY_FRAME_RATE 协同工作。手动锁定反而会引起：
+                        //   1. 强行变高 fps（如标3 没 [25, 25] 选 [30, 30]，编码 30 偶顿）
+                        //   2. fps mismatch（如老2 锁 [15, 15] + 编码 10，OMX hang 9s）
+                        //   3. 弱光长曝光固定（拖影） — 应靠红外灯补光解决，非锁帧率
                     }
                     session.setRepeatingRequest(request.build(), null, bgHandler)
                     isEncoding = true
@@ -659,8 +613,6 @@ class Camera2Preview(private val context: Context) {
     fun applyVideoConfigIfChanged() {
         if (!isEncoding) return
         val (rawW, rawH, newFps) = resolveVideoParams()
-        // 用 fallback 后的实际尺寸做相等判断，避免推 848x480 之类不支持尺寸时
-        // 永远不等于当前 1280x720 而无限触发重启
         val (newW, newH) = ensureSupportedEncoderSize(rawW, rawH)
         val newBitrateBps = resolveVideoBitrateBps()
         val mc = mediaCodec
