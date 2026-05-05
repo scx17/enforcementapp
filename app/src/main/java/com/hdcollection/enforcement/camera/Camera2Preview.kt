@@ -90,6 +90,14 @@ class Camera2Preview(private val context: Context) {
     private var bgThread: HandlerThread? = null
     private var bgHandler: Handler? = null
 
+    // Camera HAL 偶发抛 onError/onDisconnected 后自动重开计数器：
+    // 见现场 (BT280T) Camera error: 4 (ERROR_CAMERA_DEVICE) 后无人主动 reopen，
+    // surfaceCreated 因 cameraDevice==null 直接 return，主画面黑屏。
+    // 1s → 2s → 4s 退避，最多 3 次，期间任一次 openCamera 成功后 onOpened 里清零。
+    private var reopenAttempt: Int = 0
+    private val reopenMaxAttempts = 3
+    private var reopenScheduled = false
+
     private var mediaCodec: MediaCodec? = null
     private var encoderSurface: Surface? = null // 推流编码器 Surface 缓存，用于 session 并存时复用
     private var rtpSender: RtpSender? = null
@@ -163,6 +171,11 @@ class Camera2Preview(private val context: Context) {
         if (surfaceView.holder.surface?.isValid == true) {
             bgHandler?.post { rebuildCaptureSession() }
         }
+        // Activity recreate 进来时若 camera 已死（onError 后未恢复），主动拉起
+        if (cameraDevice == null) {
+            Timber.i("attachPreview: cameraDevice=null, 触发 start()")
+            start()
+        }
     }
 
     fun detachPreview() {
@@ -171,6 +184,34 @@ class Camera2Preview(private val context: Context) {
         attachedSurfaceHolderCallback = null
         attachedSurfaceView = null
         bgHandler?.post { rebuildCaptureSession() }
+    }
+
+    /**
+     * Camera HAL 抛 onError/onDisconnected 后按 1s/2s/4s 退避重开，最多 3 次。
+     * 不可恢复的错误码（DISABLED=被策略禁用、SERVICE=系统服务死了）跳过，避免 CPU 空转。
+     */
+    private fun scheduleAutoReopen(reason: String, errorCode: Int?) {
+        if (errorCode == android.hardware.camera2.CameraDevice.StateCallback.ERROR_CAMERA_DISABLED ||
+            errorCode == android.hardware.camera2.CameraDevice.StateCallback.ERROR_CAMERA_SERVICE) {
+            Timber.w("Camera $reason 错误码=$errorCode 不可恢复，放弃自动重开（等 surface/INVITE 兜底）")
+            return
+        }
+        if (reopenScheduled) {
+            Timber.d("Camera 重开已排队，忽略本次 $reason")
+            return
+        }
+        if (reopenAttempt >= reopenMaxAttempts) {
+            Timber.w("Camera 自动重开已达上限 $reopenMaxAttempts 次，放弃（等 surface/INVITE 兜底）")
+            return
+        }
+        val delayMs = 1000L shl reopenAttempt   // 1s, 2s, 4s
+        reopenAttempt++
+        reopenScheduled = true
+        Timber.i("Camera 自动重开 #$reopenAttempt: 延迟 ${delayMs}ms, reason=$reason errorCode=$errorCode")
+        bgHandler?.postDelayed({
+            reopenScheduled = false
+            if (cameraDevice == null) openCamera()
+        }, delayMs)
     }
 
     @SuppressLint("MissingPermission")
@@ -190,6 +231,8 @@ class Camera2Preview(private val context: Context) {
             manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     cameraDevice = camera
+                    reopenAttempt = 0
+                    reopenScheduled = false
                     ensureImageReader()
                     Timber.d("Camera opened")
                     // 如果预览 Surface 已 attach（如 QR 扫码抢占相机后重开场景），主动重建 session，
@@ -210,12 +253,14 @@ class Camera2Preview(private val context: Context) {
                 override fun onDisconnected(camera: CameraDevice) {
                     camera.close()
                     cameraDevice = null
-                    Timber.w("Camera disconnected")
+                    Timber.w("Camera disconnected → 自动延迟重开")
+                    scheduleAutoReopen("disconnected", null)
                 }
                 override fun onError(camera: CameraDevice, error: Int) {
                     camera.close()
                     cameraDevice = null
-                    Timber.e("Camera error: $error")
+                    Timber.e("Camera error: $error → 评估自动重开")
+                    scheduleAutoReopen("error", error)
                 }
             }, bgHandler)
         } catch (e: Exception) {
@@ -272,7 +317,12 @@ class Camera2Preview(private val context: Context) {
      * 让录像和推流真正并行，切换时画面流不中断。
      */
     private fun rebuildCaptureSession() {
-        val camera = cameraDevice ?: return
+        val camera = cameraDevice ?: run {
+            // surface 来了但 camera 已死（onError 后未恢复）→ 主动拉起，避免黑屏
+            Timber.w("rebuildCaptureSession: cameraDevice=null, 触发 openCamera")
+            openCamera()
+            return
+        }
         ensureImageReader()
 
         val useEncoder = isEncoding && encoderSurface != null

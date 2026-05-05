@@ -34,9 +34,6 @@ import java.util.*
 
 class EnforcementApp : Application() {
 
-    lateinit var logFile: File
-        private set
-
     lateinit var notificationService: PlatformNotificationService
         private set
 
@@ -60,10 +57,8 @@ class EnforcementApp : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        // 初始化日志文件（外部存储，便于导出）
+        // 初始化日志目录（外部存储，便于导出）。文件名由 FileLoggingTree 按当天日期滚动决定。
         val logDir = getExternalFilesDir("logs") ?: filesDir
-        val dateStr = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())
-        logFile = File(logDir, "app_$dateStr.log")
 
         // 挂载 Timber：Debug 模式同时输出到 Logcat，始终输出到文件
         if (BuildConfig.DEBUG) {
@@ -73,9 +68,9 @@ class EnforcementApp : Application() {
                 Timber.d("debug 包: 已重置 USB 为 ADB 模式")
             }
         }
-        Timber.plant(FileLoggingTree(logFile))
+        Timber.plant(FileLoggingTree(logDir))
 
-        Timber.i("EnforcementApp started, log file: ${logFile.absolutePath}")
+        Timber.i("EnforcementApp started, log dir: ${logDir.absolutePath}")
 
         // 初始化 SIP 对讲
         val settings = AppSettings(getSharedPreferences("app_settings", MODE_PRIVATE))
