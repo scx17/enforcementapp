@@ -42,6 +42,17 @@ class GB28181Manager(
     // 串行化 register / rebuild 的关键段，避免初始 register 与 NetworkCallback 触发的 rebuild 竞争
     private val opMutex = Mutex()
 
+    // ── C1+C2 注册/收包看门狗 ──────────────────────────────
+    // 独立看门狗协程，补 UDP 失效检测的两个盲点：
+    //  C1(老2类): WVP 假死/重启后 sendto 仍返回 true、keepaliveFailCount 不增，但长时间收不到任何 200/401 → noTraffic
+    //  C2(红点1类): keepAlive / listen 协程卡死或退出，socket 还在却零发包 → keepAliveDead / listenDead
+    private var watchdogJob: Job? = null
+    // 最后收到任何 SIP 包（含 keepAlive 的 200 响应）的时间戳
+    @Volatile private var lastReceiveTime = 0L
+    private val watchdogIntervalMs = 90_000L
+    // 超过此时长没收到任何包即判定异常（正常每 60s keepAlive 必收到一次 200 响应）
+    private val noTrafficThresholdMs = 180_000L
+
     fun register() {
         scope.launch {
             opMutex.withLock {
@@ -125,6 +136,7 @@ class GB28181Manager(
                 try {
                     val packet = DatagramPacket(buffer, buffer.size)
                     udpSocket?.receive(packet)
+                    lastReceiveTime = System.currentTimeMillis()  // 看门狗据此判断收包是否中断
                     val message = String(packet.data, 0, packet.length)
                     handleSipMessage(message, packet.address, packet.port)
                 } catch (e: Exception) {
@@ -150,8 +162,10 @@ class GB28181Manager(
                 Timber.i("GB28181: registered successfully")
                 keepaliveFailCount = 0
                 rebuilding = false
+                lastReceiveTime = System.currentTimeMillis()
                 callback.onRegistered(settings.deviceId)
                 startKeepAlive()
+                startWatchdog()
             }
             message.startsWith("INVITE") -> {
                 handleInvite(message)
@@ -322,6 +336,35 @@ class GB28181Manager(
                         triggerRebuild("keepalive sendto failed $keepaliveFailThreshold times (network unreachable?)")
                         break  // 退出当前 keepAlive 循环；register() 成功后会启动新的
                     }
+                }
+            }
+        }
+    }
+
+    /**
+     * C1+C2 注册看门狗：独立协程，周期检测注册链路是否真活着，补 UDP 的失效检测盲点。
+     * 解决"WVP 假死/重启后设备不自愈，必须人工冷启动/reboot"的问题。
+     */
+    private fun startWatchdog() {
+        // 幂等：已在运行就不重启——否则每 60s keepAlive 的 200 OK 都会重置 delay，看门狗永远等不满一个周期而失效
+        if (watchdogJob?.isActive == true) return
+        watchdogJob = scope.launch {
+            Timber.i("GB28181: 注册看门狗已启动, 间隔${watchdogIntervalMs / 1000}s")
+            while (isActive) {
+                delay(watchdogIntervalMs)
+                val sock = udpSocket
+                // rebuild 进行中 / socket 已关：交给 rebuild 流程处理，不干预
+                if (rebuilding || sock == null || sock.isClosed) continue
+                val now = System.currentTimeMillis()
+                // 不检测 keepAliveJob：它每次 keepAlive 200 OK 都重建、isActive 有瞬时空窗会误判。
+                // keepAlive 卡死/零发包(红点1 类)由 noTraffic 兜底——卡死就收不到 200 响应。
+                val listenDead = listenJob?.isActive != true         // C2: listen 协程卡死/退出
+                val noTraffic = lastReceiveTime > 0 && (now - lastReceiveTime > noTrafficThresholdMs) // C1: 发了但 WVP/链路长时间不回
+                if (listenDead || noTraffic) {
+                    val sinceRecv = if (lastReceiveTime > 0) (now - lastReceiveTime) / 1000 else -1
+                    Timber.e("GB28181 watchdog: 注册链路异常 listenDead=$listenDead noTraffic=$noTraffic(${sinceRecv}s未收包), 强制重建")
+                    triggerRebuild("watchdog: listenDead=$listenDead noTraffic=$noTraffic")
+                    break  // 重建成功收到 200 后会重新 startWatchdog
                 }
             }
         }
@@ -521,6 +564,7 @@ class GB28181Manager(
     private fun cleanup() {
         keepAliveJob?.cancel()
         listenJob?.cancel()
+        watchdogJob?.cancel()
         Timber.d("GB28181: 关闭 UDP Socket (localPort=$localPort)")
         udpSocket?.close()
         udpSocket = null
