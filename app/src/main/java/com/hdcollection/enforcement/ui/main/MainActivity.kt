@@ -358,6 +358,36 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             Timber.e(t, "LockTask: stopLockTask 失败")
         }
     }
+    private fun showExitPasswordDialog() {
+        val input = android.widget.EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                    android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            hint = "输入退出密码"
+        }
+        AlertDialog.Builder(this)
+            .setTitle("退出应用")
+            .setView(input)
+            .setPositiveButton("确认") { _, _ ->
+                if (input.text.toString() == "szga2026") {
+                    Timber.i("密码验证通过，正在退出应用")
+                    stopLockTaskSilently()
+                    finishAffinity()
+                    android.os.Process.killProcess(android.os.Process.myPid())
+                } else {
+                    Toast.makeText(this, "密码错误", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun stopLockTaskSilently() {
+        try {
+            val am = getSystemService(ACTIVITY_SERVICE) as ActivityManager
+            if (am.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE) stopLockTask()
+        } catch (_: Throwable) {}
+    }
+
     // ===== /Lock Task =====
 
     private fun startInternalActivity(intent: Intent) {
@@ -397,6 +427,10 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
     private fun setupBottomButtons() {
         findViewById<ImageButton>(R.id.btnSettings).setOnClickListener {
             startInternalActivity(Intent(this, SettingsActivity::class.java))
+        }
+        findViewById<ImageButton>(R.id.btnSettings).setOnLongClickListener {
+            showExitPasswordDialog()
+            true
         }
         findViewById<ImageButton>(R.id.btnLight).setOnClickListener {
             showLightPanel()
