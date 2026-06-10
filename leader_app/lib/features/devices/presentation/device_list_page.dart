@@ -6,6 +6,7 @@ import 'package:hdc_mobile/features/alarm/application/alarm_provider.dart';
 import 'package:hdc_mobile/features/devices/application/device_provider.dart';
 import 'package:hdc_mobile/features/monitor/application/monitor_controller.dart';
 import 'package:hdc_mobile/features/conference/presentation/member_select_page.dart';
+import 'package:hdc_mobile/features/map/presentation/map_page.dart';
 import 'package:hdc_mobile/features/monitor/presentation/playback_page.dart';
 import 'package:hdc_mobile/features/talk/presentation/intercom_page.dart';
 import 'package:hdc_mobile/shared/models/device_model.dart';
@@ -42,6 +43,15 @@ class _DeviceListPageState extends ConsumerState<DeviceListPage> {
       appBar: AppBar(
         title: const Text('设备列表'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.map_outlined),
+            tooltip: '地图位置',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const MapPage(),
+              ),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.campaign_outlined),
             tooltip: '集群喊话',
