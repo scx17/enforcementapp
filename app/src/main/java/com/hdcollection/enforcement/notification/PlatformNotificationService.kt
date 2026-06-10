@@ -38,6 +38,10 @@ class PlatformNotificationService(
 ) {
     private var connection: HubConnection? = null
     private var audioTrack: AudioTrack? = null
+
+    /** 当前所在的集群会议 ID；null 表示未入会。用于重连后自动重新入组。 */
+    @Volatile
+    private var currentConferenceId: String? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     val notifications: CopyOnWriteArrayList<PlatformNotification> = CopyOnWriteArrayList()
@@ -138,6 +142,57 @@ class PlatformNotificationService(
                 }
             }, String::class.java)
 
+            // 集群对讲：收到入会邀请 → 加入会议音频组（开始接收喊话）
+            conn.on("InviteToConference", { data: String ->
+                try {
+                    val json = org.json.JSONObject(data)
+                    val confId = json.optInt("conferenceId", json.optInt("ConferenceId", -1))
+                    val name = json.optString("name", json.optString("Name", ""))
+                    if (confId > 0) {
+                        val cid = confId.toString()
+                        currentConferenceId = cid
+                        conn.invoke("JoinConferenceGroup", cid)
+                        Timber.i("集群对讲: 已入会 conferenceId=$confId, name=$name")
+                    } else {
+                        Timber.w("InviteToConference 缺 conferenceId, data=$data")
+                    }
+                } catch (e: Exception) {
+                    Timber.e(e, "InviteToConference 处理失败")
+                }
+            }, String::class.java)
+
+            // 集群对讲音频（会议组广播）→ 复用 PCM 播放
+            conn.on("ConferenceAudio", { audioBase64: String ->
+                try {
+                    val pcmBytes = Base64.decode(audioBase64, Base64.DEFAULT)
+                    playPcmAudio(pcmBytes)
+                } catch (e: Exception) {
+                    Timber.e(e, "ConferenceAudio 播放失败")
+                }
+            }, String::class.java)
+
+            // 会议事件（开始/结束）→ 结束时离组停播
+            conn.on("ConferenceEvent", { data: String ->
+                try {
+                    val json = org.json.JSONObject(data)
+                    val type = json.optString("type", json.optString("Type", ""))
+                    Timber.i("ConferenceEvent: type=$type, data=$data")
+                    if (type == "ended") {
+                        currentConferenceId?.let { cid ->
+                            try {
+                                conn.invoke("LeaveConferenceGroup", cid)
+                            } catch (e: Exception) {
+                                Timber.w(e, "离会失败 conferenceId=$cid")
+                            }
+                        }
+                        currentConferenceId = null
+                        stopTalkAudio()
+                    }
+                } catch (e: Exception) {
+                    Timber.e(e, "ConferenceEvent 处理失败")
+                }
+            }, String::class.java)
+
             // 监听新工单分配 — App 内弹窗 + 循环声音直到已阅
             conn.on("NewWorkTask", { data: String ->
                 try {
@@ -220,6 +275,7 @@ class PlatformNotificationService(
             try {
                 conn.start().blockingAwait()
                 conn.invoke("JoinDeviceNotificationGroup", settings.deviceId)
+                currentConferenceId?.let { conn.invoke("JoinConferenceGroup", it) }
                 Timber.i("SignalR: 连接成功，已加入设备组 ${settings.deviceId}")
             } catch (e: Exception) {
                 Timber.e(e, "SignalR: 首次连接失败，启动重连守护线程")
@@ -268,6 +324,7 @@ class PlatformNotificationService(
                         Timber.i("SignalR: 第 $attempt 次重连尝试")
                         conn.start().blockingAwait()
                         conn.invoke("JoinDeviceNotificationGroup", settings.deviceId)
+                        currentConferenceId?.let { conn.invoke("JoinConferenceGroup", it) }
                         Timber.i("SignalR: 重连成功（第 $attempt 次尝试）")
                         return@Thread
                     } catch (e: Exception) {
