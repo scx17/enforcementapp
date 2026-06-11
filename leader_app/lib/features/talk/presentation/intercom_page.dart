@@ -14,6 +14,7 @@ import 'package:hdc_mobile/features/devices/data/device_repository.dart';
 import 'package:hdc_mobile/features/talk/data/talk_repository.dart';
 import 'package:hdc_mobile/shared/models/device_model.dart';
 import 'package:hdc_mobile/shared/utils/device_label.dart';
+import 'package:hdc_mobile/shared/utils/live_low_latency.dart';
 
 /// 单兵对讲页。
 ///
@@ -98,6 +99,7 @@ class _IntercomPageState extends ConsumerState<IntercomPage> {
           configuration:
               const PlayerConfiguration(bufferSize: 4 * 1024 * 1024),
         );
+        await applyLiveLowLatency(_player!);
         await _player!.open(Media(audioUrl), play: true);
       }
 

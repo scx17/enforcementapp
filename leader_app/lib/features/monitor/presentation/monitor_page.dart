@@ -12,6 +12,7 @@ import 'package:hdc_mobile/features/talk/presentation/intercom_page.dart';
 import 'package:hdc_mobile/shared/models/device_model.dart';
 import 'package:hdc_mobile/shared/models/stream_session.dart';
 import 'package:hdc_mobile/shared/utils/device_label.dart';
+import 'package:hdc_mobile/shared/utils/live_low_latency.dart';
 
 class MonitorPage extends ConsumerWidget {
   const MonitorPage({super.key});
@@ -231,7 +232,12 @@ class _VideoSlotState extends State<_VideoSlot> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() => _playerError = msg);
     });
-    _syncSession();
+    _applyLowLatencyThenSync();
+  }
+
+  Future<void> _applyLowLatencyThenSync() async {
+    await applyLiveLowLatency(_player);
+    await _syncSession();
   }
 
   @override
@@ -794,9 +800,14 @@ class _FullscreenPlayerState extends State<_FullscreenPlayer> {
       if (!mounted) return;
       setState(() => _error = msg);
     });
+    _applyLowLatencyThenOpen();
+  }
+
+  Future<void> _applyLowLatencyThenOpen() async {
+    await applyLiveLowLatency(_player);
     final url = widget.session.nativeUrl;
     if (url != null) {
-      _player.open(Media(url), play: true);
+      await _player.open(Media(url), play: true);
     }
   }
 
