@@ -10,16 +10,14 @@ import 'package:media_kit/media_kit.dart';
 Future<void> applyLiveLowLatency(Player player) async {
   final platform = player.platform;
   if (platform is! NativePlayer) return;
-  // mpv 官方低延迟预设（audio-buffer=0 / cache-pause=no / nobuffer 等组合）
+  // mpv 官方低延迟预设：已包含 audio-buffer=0 / cache-pause=no /
+  // demuxer-lavf-o-add=fflags=+nobuffer / demuxer-lavf-analyzeduration=0 等组合，
+  // 是把直播延迟压到亚秒级的核心。
   await platform.setProperty('profile', 'low-latency');
-  // 关闭前向缓存与预读，始终贴最新帧
-  await platform.setProperty('cache', 'no');
+  // 进一步关掉前向预读，始终贴最新帧。
   await platform.setProperty('demuxer-readahead-secs', '0');
-  // ffmpeg 解复用不缓冲
-  await platform.setProperty('demuxer-lavf-o', 'fflags=+nobuffer');
-  // 最快起播：极小 probesize + 不做时长分析
-  await platform.setProperty('demuxer-lavf-probesize', '32768');
-  await platform.setProperty('demuxer-lavf-analyzeduration', '0');
-  // 直播宁可丢帧也不为了缓存而暂停
-  await platform.setProperty('cache-pause', 'no');
+  // 注意：不要设 cache=no —— 对 HTTP-FLV 网络流会触发
+  // "you can't force it with --force-seekable=yes" 并导致播放失败
+  // （网络流需要 stream cache 才能正常 demux）。low-latency profile
+  // 已把 cache 调到足够小，无需也不应强制关闭。
 }
