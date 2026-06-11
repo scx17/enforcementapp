@@ -1,3 +1,5 @@
+import 'package:hdc_mobile/core/config/app_config.dart';
+
 class StreamSession {
   const StreamSession({
     required this.streamId,
@@ -39,5 +41,16 @@ class StreamSession {
   ///
   /// 注意：libmpv 不支持 WebSocket-FLV（ws://），那是浏览器 flv.js 的能力。
   /// 移动端必须用 HTTP-FLV、RTSP 或 HLS。优先 HTTP-FLV（低延迟）。
-  String? get nativeUrl => flvUrl ?? rtspUrl ?? hlsUrl ?? wsFlvUrl;
+  ///
+  /// 后端对 flvUrl 返回的是 nginx 代理相对路径 `/media/...`（为 Web 同源设计），
+  /// 原生播放器无法解析相对路径会报 "failed to open"，故对以 `/` 开头的相对
+  /// 路径补上 serverUrl 转成绝对地址。
+  String? get nativeUrl {
+    final raw = flvUrl ?? rtspUrl ?? hlsUrl ?? wsFlvUrl;
+    if (raw == null || raw.isEmpty) return null;
+    if (raw.startsWith('/')) {
+      return '${AppConfig.instance.serverUrl}$raw';
+    }
+    return raw;
+  }
 }

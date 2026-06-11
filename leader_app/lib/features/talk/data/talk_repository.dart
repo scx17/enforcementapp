@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hdc_mobile/core/config/app_config.dart';
 import 'package:hdc_mobile/core/http/api_exception.dart';
 import 'package:hdc_mobile/core/http/dio_client.dart';
 
@@ -18,7 +19,17 @@ class TalkSession {
   final String? pushAudioUrl;
 
   /// 原生播放器可解析的下行音频地址（听设备）。
-  String? get nativeAudioUrl => flvUrl ?? audioUrl;
+  ///
+  /// 后端对 flvUrl/audioUrl 返回 nginx 代理相对路径 `/media/...`，原生播放器
+  /// 无法解析相对路径，故对以 `/` 开头的相对路径补上 serverUrl 转绝对地址。
+  String? get nativeAudioUrl {
+    final raw = flvUrl ?? audioUrl;
+    if (raw == null || raw.isEmpty) return null;
+    if (raw.startsWith('/')) {
+      return '${AppConfig.instance.serverUrl}$raw';
+    }
+    return raw;
+  }
 
   factory TalkSession.fromJson(Map<String, dynamic> json) {
     return TalkSession(

@@ -1,7 +1,7 @@
 name: hdc_mobile
 description: 移动执法监控 · HdDataCollection Mobile
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ^3.12.1
