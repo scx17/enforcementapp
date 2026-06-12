@@ -370,15 +370,35 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             .setPositiveButton("确认") { _, _ ->
                 if (input.text.toString() == "szga2026") {
                     Timber.i("密码验证通过，正在退出应用")
-                    stopLockTaskSilently()
-                    finishAffinity()
-                    android.os.Process.killProcess(android.os.Process.myPid())
+                    exitAppCompletely()
                 } else {
                     Toast.makeText(this, "密码错误", Toast.LENGTH_SHORT).show()
                 }
             }
             .setNegativeButton("取消", null)
             .show()
+    }
+
+    /**
+     * 退出应用: 先清空 LockTask 白名单防止系统自动拉起，再 stop + kill。
+     * 不清白名单的话，Device Owner 机制会把进程重新拉起来。
+     */
+    private fun exitAppCompletely() {
+        try {
+            val dpm = getSystemService(android.content.Context.DEVICE_POLICY_SERVICE)
+                    as android.app.admin.DevicePolicyManager
+            if (dpm.isDeviceOwnerApp(packageName)) {
+                val admin = android.content.ComponentName(
+                    this, com.hdcollection.enforcement.upgrade.AppDeviceAdminReceiver::class.java)
+                dpm.setLockTaskPackages(admin, arrayOf()) // 清空白名单，阻止系统拉起
+                Timber.i("LockTask 白名单已清空，退出后系统不再自动拉起")
+            }
+        } catch (t: Throwable) {
+            Timber.w(t, "清空 LockTask 白名单失败")
+        }
+        stopLockTaskSilently()
+        finishAffinity()
+        android.os.Process.killProcess(android.os.Process.myPid())
     }
 
     private fun stopLockTaskSilently() {
