@@ -368,7 +368,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
             .setTitle("退出应用")
             .setView(input)
             .setPositiveButton("确认") { _, _ ->
-                if (input.text.toString() == "szga2026") {
+                if (input.text.toString() == "111111") {
                     Timber.i("密码验证通过，正在退出应用")
                     exitAppCompletely()
                 } else {
