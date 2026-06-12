@@ -385,34 +385,45 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
     }
 
     /**
-     * 退出应用: 停 Service → stopLockTask → 设超长 grace period。
+     * 退出应用: 停 Service → stopLockTask → 启动系统 Launcher3 → 设 grace period → finish。
      *
-     * 这个设备没有标准 launcher，stopLockTask 后系统发 HOME intent 会路由回自己，
-     * 所以不能做 finish/killProcess/finishAndRemoveTask（都会触发系统重建 Activity）。
-     * 改用和 5 连击运维手势相同的机制：stopLockTask + 设 grace period，
-     * enterLockTaskIfNeeded 检查 grace period 不会重入，用户可以自由操作。
-     * 重启后 lockTaskUnlockUntil 归零，自动恢复 LockTask。
+     * 本 App Manifest 声明了 HOME category（作为设备 launcher），所以 ACTION_MAIN+HOME
+     * 会路由回自己。必须显式启动 com.android.launcher3 才能真正回到桌面。
+     * stopLockTask 后设 24h grace 防止 onResume 重入。
      */
     private fun exitAppCompletely() {
-        Timber.i("exitAppCompletely: 密码退出，停服务+解锁")
+        Timber.i("exitAppCompletely: 密码退出，停服务+解锁+启动Launcher3")
         // 1. 停掉前台 Service
         try {
             stopService(Intent(this, com.hdcollection.enforcement.service.MediaCaptureService::class.java))
         } catch (t: Throwable) {
             Timber.w(t, "exitAppCompletely: 停止 MediaCaptureService 失败")
         }
-        // 2. stopLockTask + 设 24 小时 grace（和 5 连击同机制，不 finish 不 kill）
+        // 2. stopLockTask + 设 24 小时 grace
         try {
             val am = getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
             if (am.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE) {
                 stopLockTask()
             }
-            lockTaskUnlockUntil = System.currentTimeMillis() + 24 * 60 * 60 * 1000L // 24 小时
-            Toast.makeText(this, "已退出，可自由操作设备", Toast.LENGTH_LONG).show()
-            Timber.i("exitAppCompletely: LockTask 已退出，24h grace")
+            lockTaskUnlockUntil = System.currentTimeMillis() + 24 * 60 * 60 * 1000L
         } catch (t: Throwable) {
             Timber.e(t, "exitAppCompletely: stopLockTask 失败")
         }
+        // 3. 显式启动系统 Launcher3（不能发 HOME intent——会路由回自己）
+        try {
+            val launcherIntent = packageManager.getLaunchIntentForPackage("com.android.launcher3")
+            if (launcherIntent != null) {
+                startActivity(launcherIntent)
+                Timber.i("exitAppCompletely: 已启动 Launcher3")
+            } else {
+                Timber.w("exitAppCompletely: Launcher3 未安装，无法跳转桌面")
+            }
+        } catch (t: Throwable) {
+            Timber.w(t, "exitAppCompletely: 启动 Launcher3 失败")
+        }
+        // 4. 结束自己（grace period 已设，onResume 不会重入 LockTask）
+        finish()
+        Toast.makeText(this, "已退出，可自由操作设备", Toast.LENGTH_LONG).show()
     }
 
     private fun stopLockTaskSilently() {
