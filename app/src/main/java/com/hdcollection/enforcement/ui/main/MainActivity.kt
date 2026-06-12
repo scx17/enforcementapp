@@ -140,6 +140,19 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // 退出标志还在 → 系统因 top-activity 重启了进程，直接回桌面不初始化
+        if (com.hdcollection.enforcement.service.MediaCaptureService.isAppExiting(this)) {
+            Timber.w("onCreate: 检测到退出标志，跳转桌面并结束")
+            try {
+                startActivity(Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_HOME)
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                })
+            } catch (_: Throwable) {}
+            finishAffinity()
+            return
+        }
+
         // 正常启动时清除退出标志（上一次退出留下的磁盘标记）
         com.hdcollection.enforcement.service.MediaCaptureService.clearExiting(this)
 
@@ -307,6 +320,8 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
 
     private fun enterLockTaskIfNeeded() {
         if (android.os.Build.VERSION.SDK_INT < 21) return
+        // 退出中不重入 LockTask
+        if (com.hdcollection.enforcement.service.MediaCaptureService.isAppExiting(this)) return
         // 设备未配置时不锁屏(用户要能进设置页)
         if (settings.customCode.isBlank() && settings.deviceId.isBlank()) return
         // 运维 5 连点解锁后留 5 分钟操作窗口,期间不重新锁
