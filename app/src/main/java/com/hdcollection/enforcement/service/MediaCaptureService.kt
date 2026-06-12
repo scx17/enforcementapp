@@ -122,8 +122,8 @@ class MediaCaptureService : Service(), StreamCallback {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Timber.i("MediaCaptureService onStartCommand action=${intent?.action}")
-        if (isExiting) {
-            Timber.w("MediaCaptureService: 检测到退出标志，立即 stopSelf")
+        if (isAppExiting(this)) {
+            Timber.w("MediaCaptureService: 检测到退出标志（磁盘），立即 stopSelf")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -341,5 +341,29 @@ class MediaCaptureService : Service(), StreamCallback {
         /** 退出应用时置 true，防止 START_STICKY 把 Service（连带 Activity）拉起 */
         @Volatile
         var isExiting: Boolean = false
+
+        private const val PREFS_NAME = "enforcement_exit_state"
+        private const val KEY_EXITING = "is_exiting"
+
+        /** 持久化退出标志到 SharedPreferences（killProcess 后新进程仍可读取） */
+        fun markExiting(context: android.content.Context) {
+            isExiting = true
+            context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_EXITING, true).apply()
+        }
+
+        /** 正常启动时清除退出标志 */
+        fun clearExiting(context: android.content.Context) {
+            isExiting = false
+            context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+                .edit().remove(KEY_EXITING).apply()
+        }
+
+        /** 检查是否处于退出状态（优先读内存，fallback 读磁盘） */
+        fun isAppExiting(context: android.content.Context): Boolean {
+            if (isExiting) return true
+            val prefs = context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            return prefs.getBoolean(KEY_EXITING, false).also { isExiting = it }
+        }
     }
 }

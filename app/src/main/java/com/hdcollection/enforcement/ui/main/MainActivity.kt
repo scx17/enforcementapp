@@ -140,6 +140,9 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // 正常启动时清除退出标志（上一次退出留下的磁盘标记）
+        com.hdcollection.enforcement.service.MediaCaptureService.clearExiting(this)
+
         // 锁屏穿透 + 屏幕唤醒 — reboot 后 BootReceiver 启动本 Activity 时屏幕通常
         // 处于锁屏 / 休眠状态，没这些 flag 用户看不到 App 界面（在锁屏后面跑）
         if (android.os.Build.VERSION.SDK_INT >= 27) {
@@ -385,8 +388,8 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
      */
     private fun exitAppCompletely() {
         Timber.i("exitAppCompletely: 开始退出流程")
-        // 1. 置退出标志，阻止 START_STICKY 重启 Service 后又把 Activity 拉起来
-        com.hdcollection.enforcement.service.MediaCaptureService.isExiting = true
+        // 1. 置退出标志（内存+磁盘），阻止 START_STICKY 重启 Service 后又把 Activity 拉起来
+        com.hdcollection.enforcement.service.MediaCaptureService.markExiting(this)
         // 2. 停掉前台 Service
         try {
             stopService(Intent(this, com.hdcollection.enforcement.service.MediaCaptureService::class.java))
