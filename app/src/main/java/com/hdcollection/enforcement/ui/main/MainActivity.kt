@@ -667,7 +667,13 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
     // 禁止返回键退出（执法仪主应用不允许被退出）
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
-        Timber.d("返回键被拦截，执法仪主应用禁止退出")
+        if (System.currentTimeMillis() < lockTaskUnlockUntil) {
+            Timber.d("退出模式：放行返回键")
+            @Suppress("DEPRECATION")
+            super.onBackPressed()
+        } else {
+            Timber.d("返回键被拦截，执法仪主应用禁止退出")
+        }
     }
 
     /**
