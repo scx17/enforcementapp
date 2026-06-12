@@ -140,13 +140,6 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // 退出标志还在 → 系统因 top-activity 重启了进程，直接移除 task
-        if (com.hdcollection.enforcement.service.MediaCaptureService.isAppExiting(this)) {
-            Timber.w("onCreate: 检测到退出标志，移除 task 并结束")
-            finishAndRemoveTask()
-            return
-        }
-
         // 正常启动时清除退出标志（上一次退出留下的磁盘标记）
         com.hdcollection.enforcement.service.MediaCaptureService.clearExiting(this)
 
