@@ -380,21 +380,23 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
     }
 
     /**
-     * 退出应用: 先停前台 Service（START_STICKY 会被系统自动拉起），再清 LockTask 白名单，最后 kill。
-     * 顺序: stopService → stopLockTask → clearWhitelist → finishAffinity → killProcess
+     * 退出应用: 置退出标志 → 停 Service → 清 LockTask → kill。
+     * isExiting 标志确保即使系统因 START_STICKY 重启 Service，Service 也会立即 stopSelf。
      */
     private fun exitAppCompletely() {
         Timber.i("exitAppCompletely: 开始退出流程")
-        // 1. 停掉 MediaCaptureService，防止 START_STICKY 自动重启并把 Activity 带回来
+        // 1. 置退出标志，阻止 START_STICKY 重启 Service 后又把 Activity 拉起来
+        com.hdcollection.enforcement.service.MediaCaptureService.isExiting = true
+        // 2. 停掉前台 Service
         try {
             stopService(Intent(this, com.hdcollection.enforcement.service.MediaCaptureService::class.java))
             Timber.i("exitAppCompletely: MediaCaptureService 已停止")
         } catch (t: Throwable) {
             Timber.w(t, "exitAppCompletely: 停止 MediaCaptureService 失败")
         }
-        // 2. 退出 LockTask 模式
+        // 3. 退出 LockTask 模式
         stopLockTaskSilently()
-        // 3. 清空 LockTask 白名单，阻止系统因 Device Owner 策略拉起
+        // 4. 清空 LockTask 白名单
         try {
             val dpm = getSystemService(android.content.Context.DEVICE_POLICY_SERVICE)
                     as android.app.admin.DevicePolicyManager
@@ -407,7 +409,7 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         } catch (t: Throwable) {
             Timber.w(t, "exitAppCompletely: 清空 LockTask 白名单失败")
         }
-        // 4. 关闭所有 Activity + 杀进程
+        // 5. 关闭所有 Activity + 杀进程
         finishAffinity()
         android.os.Process.killProcess(android.os.Process.myPid())
     }

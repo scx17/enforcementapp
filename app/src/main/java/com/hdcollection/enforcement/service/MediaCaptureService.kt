@@ -122,6 +122,11 @@ class MediaCaptureService : Service(), StreamCallback {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Timber.i("MediaCaptureService onStartCommand action=${intent?.action}")
+        if (isExiting) {
+            Timber.w("MediaCaptureService: 检测到退出标志，立即 stopSelf")
+            stopSelf()
+            return START_NOT_STICKY
+        }
         when (intent?.action) {
             ACTION_RELOAD_GB28181 -> reloadGb28181()
             ACTION_REOPEN_CAMERA -> reopenCameraIfNeeded()
@@ -332,5 +337,9 @@ class MediaCaptureService : Service(), StreamCallback {
         const val NOTIFICATION_ID = 1001
         const val ACTION_RELOAD_GB28181 = "com.hdcollection.enforcement.RELOAD_GB28181"
         const val ACTION_REOPEN_CAMERA = "com.hdcollection.enforcement.REOPEN_CAMERA"
+
+        /** 退出应用时置 true，防止 START_STICKY 把 Service（连带 Activity）拉起 */
+        @Volatile
+        var isExiting: Boolean = false
     }
 }
