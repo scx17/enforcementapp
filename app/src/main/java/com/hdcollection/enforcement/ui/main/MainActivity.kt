@@ -385,25 +385,34 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
     }
 
     /**
-     * 退出应用: 停 Service → 退 LockTask → 回桌面 → finishAndRemoveTask。
-     * 不清白名单（会导致系统卡死），不杀进程（会触发 for-top-activity 重启）。
-     * 用 finishAndRemoveTask 从 recent 列表移除 task，阻止系统重建。
+     * 退出应用: 停 Service → stopLockTask → 设超长 grace period。
+     *
+     * 这个设备没有标准 launcher，stopLockTask 后系统发 HOME intent 会路由回自己，
+     * 所以不能做 finish/killProcess/finishAndRemoveTask（都会触发系统重建 Activity）。
+     * 改用和 5 连击运维手势相同的机制：stopLockTask + 设 grace period，
+     * enterLockTaskIfNeeded 检查 grace period 不会重入，用户可以自由操作。
+     * 重启后 lockTaskUnlockUntil 归零，自动恢复 LockTask。
      */
     private fun exitAppCompletely() {
-        Timber.i("exitAppCompletely: 开始退出流程")
-        // 1. 置退出标志（磁盘），防止 Service 被拉起后继续运行
-        com.hdcollection.enforcement.service.MediaCaptureService.markExiting(this)
-        // 2. 停掉前台 Service
+        Timber.i("exitAppCompletely: 密码退出，停服务+解锁")
+        // 1. 停掉前台 Service
         try {
             stopService(Intent(this, com.hdcollection.enforcement.service.MediaCaptureService::class.java))
-            Timber.i("exitAppCompletely: MediaCaptureService 已停止")
         } catch (t: Throwable) {
             Timber.w(t, "exitAppCompletely: 停止 MediaCaptureService 失败")
         }
-        // 3. 退出 LockTask 模式（系统会自动显示 launcher）
-        stopLockTaskSilently()
-        // 4. 结束 Activity（不发 HOME intent — Device Owner 下 HOME 被路由回自己）
-        finishAndRemoveTask()
+        // 2. stopLockTask + 设 24 小时 grace（和 5 连击同机制，不 finish 不 kill）
+        try {
+            val am = getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            if (am.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE) {
+                stopLockTask()
+            }
+            lockTaskUnlockUntil = System.currentTimeMillis() + 24 * 60 * 60 * 1000L // 24 小时
+            Toast.makeText(this, "已退出，可自由操作设备", Toast.LENGTH_LONG).show()
+            Timber.i("exitAppCompletely: LockTask 已退出，24h grace")
+        } catch (t: Throwable) {
+            Timber.e(t, "exitAppCompletely: stopLockTask 失败")
+        }
     }
 
     private fun stopLockTaskSilently() {
