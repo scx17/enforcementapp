@@ -400,19 +400,9 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         } catch (t: Throwable) {
             Timber.w(t, "exitAppCompletely: 停止 MediaCaptureService 失败")
         }
-        // 3. 退出 LockTask 模式
+        // 3. 退出 LockTask 模式（系统会自动显示 launcher）
         stopLockTaskSilently()
-        // 4. 回到桌面
-        try {
-            startActivity(Intent(Intent.ACTION_MAIN).apply {
-                addCategory(Intent.CATEGORY_HOME)
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            })
-            Timber.i("exitAppCompletely: 已跳转桌面")
-        } catch (t: Throwable) {
-            Timber.w(t, "exitAppCompletely: 跳转桌面失败")
-        }
-        // 5. 移除 task（比 finishAffinity 更彻底，阻止 for-top-activity 重建）
+        // 4. 结束 Activity（不发 HOME intent — Device Owner 下 HOME 被路由回自己）
         finishAndRemoveTask()
     }
 
