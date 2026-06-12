@@ -383,12 +383,12 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
     }
 
     /**
-     * 退出应用: 置退出标志 → 停 Service → 清 LockTask → kill。
-     * isExiting 标志确保即使系统因 START_STICKY 重启 Service，Service 也会立即 stopSelf。
+     * 退出应用: 不杀进程（killProcess=崩溃信号，系统会重建 task 里的 Activity），
+     * 而是: 停 Service → 退 LockTask → 清白名单 → 回桌面 → finish。
      */
     private fun exitAppCompletely() {
         Timber.i("exitAppCompletely: 开始退出流程")
-        // 1. 置退出标志（内存+磁盘），阻止 START_STICKY 重启 Service 后又把 Activity 拉起来
+        // 1. 置退出标志（磁盘），防止 Service 被 START_STICKY 拉起后继续运行
         com.hdcollection.enforcement.service.MediaCaptureService.markExiting(this)
         // 2. 停掉前台 Service
         try {
@@ -412,9 +412,19 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         } catch (t: Throwable) {
             Timber.w(t, "exitAppCompletely: 清空 LockTask 白名单失败")
         }
-        // 5. 关闭所有 Activity + 杀进程
+        // 5. 回到桌面（不杀进程，让系统自然回收）
+        try {
+            val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_HOME)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(homeIntent)
+            Timber.i("exitAppCompletely: 已跳转桌面")
+        } catch (t: Throwable) {
+            Timber.w(t, "exitAppCompletely: 跳转桌面失败")
+        }
+        // 6. 关闭所有 Activity
         finishAffinity()
-        android.os.Process.killProcess(android.os.Process.myPid())
     }
 
     private fun stopLockTaskSilently() {
