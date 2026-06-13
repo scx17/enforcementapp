@@ -365,26 +365,26 @@ class MediaListFragment : Fragment() {
         savedInstanceState: Bundle?
     ): View = inflater.inflate(R.layout.fragment_media_list, container, false)
 
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
-        val dirName = arguments?.getString(ARG_DIR) ?: "recordings"
-        val dir = File(requireActivity().filesDir, dirName)
-        val files = dir.listFiles()
-            ?.filter { it.isFile }
-            ?.sortedByDescending { it.lastModified() }
-            ?: emptyList()
+    private val dirName: String by lazy { arguments?.getString(ARG_DIR) ?: "recordings" }
 
-        val mediaType = when (dirName) {
+    private val mediaType: String by lazy {
+        when (dirName) {
             "recordings" -> "video"
             "audios" -> "audio"
             else -> "image"
         }
+    }
 
-        Timber.d("PlaybackActivity: found ${files.size} files in $dirName (type=$mediaType)")
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
 
         val activity = requireActivity() as PlaybackActivity
         val recycler = view.findViewById<RecyclerView>(R.id.recyclerView)
         recycler.layoutManager = LinearLayoutManager(requireContext())
+
+        val files = scanFiles()
+        Timber.d("PlaybackActivity: found ${files.size} files in $dirName (type=$mediaType)")
+
         val adapter = MediaFileAdapter(files, mediaType, activity.uploadStates, activity, onClick = { file ->
             when (mediaType) {
                 "video" -> playVideo(file)
@@ -401,6 +401,13 @@ class MediaListFragment : Fragment() {
 
     override fun onResume() {
         super.onResume()
+        // 每次可见时重新扫描，确保录像/拍照后切回来能看到新文件
+        val fresh = scanFiles()
+        if (fresh.map { it.name } != mediaFiles.map { it.name }) {
+            Timber.d("PlaybackActivity: $dirName changed, ${mediaFiles.size}->${fresh.size}")
+            mediaFiles = fresh
+            mediaAdapter?.updateFiles(fresh)
+        }
         // 切到本 fragment 时将 activity 的当前 adapter/files 指向本页，并同步顶部计数与勾选状态
         val activity = activity as? PlaybackActivity ?: return
         activity.currentAdapter = mediaAdapter
@@ -409,8 +416,13 @@ class MediaListFragment : Fragment() {
         // 切 tab 时丢弃上一页的选择，避免跨 tab 误删
         activity.selectedFiles.clear()
         activity.updateDeleteButtonText()
-        mediaAdapter?.notifyDataSetChanged()
     }
+
+    private fun scanFiles(): List<File> =
+        File(requireActivity().filesDir, dirName).listFiles()
+            ?.filter { it.isFile }
+            ?.sortedByDescending { it.lastModified() }
+            ?: emptyList()
 
     private fun playAudio(file: File) {
         try {
@@ -479,13 +491,18 @@ class MediaListFragment : Fragment() {
 }
 
 class MediaFileAdapter(
-    private val files: List<File>,
+    private var files: List<File>,
     private val mediaType: String, // "video" / "image" / "audio"
     private val uploadStates: Map<String, String>,
     private val activity: PlaybackActivity,
     private val onClick: (File) -> Unit,
     private val onUpload: (File, MediaFileAdapter, Int) -> Unit
 ) : RecyclerView.Adapter<MediaFileAdapter.ViewHolder>() {
+
+    fun updateFiles(newFiles: List<File>) {
+        files = newFiles
+        notifyDataSetChanged()
+    }
 
     inner class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val cbSelect: CheckBox = view.findViewById(R.id.cbSelect)
