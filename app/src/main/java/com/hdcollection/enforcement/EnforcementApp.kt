@@ -99,8 +99,8 @@ class EnforcementApp : Application() {
             if (dpm.isDeviceOwnerApp(packageName)) {
                 val admin = android.content.ComponentName(
                     this, com.hdcollection.enforcement.upgrade.AppDeviceAdminReceiver::class.java)
-                dpm.setLockTaskPackages(admin, arrayOf(packageName))
-                Timber.i("LockTask 白名单已设置: $packageName (Device Owner)")
+                dpm.setLockTaskPackages(admin, arrayOf(packageName, "com.android.launcher3"))
+                Timber.i("LockTask 白名单已设置: $packageName, com.android.launcher3 (Device Owner)")
             } else {
                 Timber.w("非 Device Owner,LockTask 进入时会弹系统确认窗")
             }

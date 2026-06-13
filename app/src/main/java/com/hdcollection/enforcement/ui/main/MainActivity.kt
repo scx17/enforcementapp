@@ -385,11 +385,10 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
     }
 
     /**
-     * 退出应用: 停 Service → stopLockTask → 启动系统 Launcher3 → 设 grace period → finish。
+     * 退出应用: 停 Service → stopLockTask → 显式启动 Launcher3 → finish。
      *
-     * 本 App Manifest 声明了 HOME category（作为设备 launcher），所以 ACTION_MAIN+HOME
-     * 会路由回自己。必须显式启动 com.android.launcher3 才能真正回到桌面。
-     * stopLockTask 后设 24h grace 防止 onResume 重入。
+     * App Manifest 声明了 HOME category，HOME intent 会路由回自己。
+     * 必须用 component 名显式启动 Launcher3（已加入 LockTask 白名单）。
      */
     private fun exitAppCompletely() {
         Timber.i("exitAppCompletely: 密码退出，停服务+解锁+启动Launcher3")
@@ -409,19 +408,20 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
         } catch (t: Throwable) {
             Timber.e(t, "exitAppCompletely: stopLockTask 失败")
         }
-        // 3. 显式启动系统 Launcher3（不能发 HOME intent——会路由回自己）
+        // 3. 显式启动 Launcher3（用 component 名，不依赖 HOME intent）
         try {
-            val launcherIntent = packageManager.getLaunchIntentForPackage("com.android.launcher3")
-            if (launcherIntent != null) {
-                startActivity(launcherIntent)
-                Timber.i("exitAppCompletely: 已启动 Launcher3")
-            } else {
-                Timber.w("exitAppCompletely: Launcher3 未安装，无法跳转桌面")
-            }
+            startActivity(Intent().apply {
+                component = android.content.ComponentName(
+                    "com.android.launcher3",
+                    "com.android.launcher3.uioverrides.QuickstepLauncher"
+                )
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+            Timber.i("exitAppCompletely: 已启动 Launcher3")
         } catch (t: Throwable) {
             Timber.w(t, "exitAppCompletely: 启动 Launcher3 失败")
         }
-        // 4. 结束自己（grace period 已设，onResume 不会重入 LockTask）
+        // 4. 结束自己
         finish()
         Toast.makeText(this, "已退出，可自由操作设备", Toast.LENGTH_LONG).show()
     }
