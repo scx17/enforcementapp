@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -32,6 +32,10 @@ enum _TalkPhase { connecting, talking, error, ended }
 
 class _IntercomPageState extends ConsumerState<IntercomPage> {
   static const int _sampleRate = 8000;
+  static const _audioChannel = MethodChannel('hdc/audio');
+
+  bool _peerTalking = false; // 收到对端音频帧→对方说话中
+  Timer? _peerTalkTimer;
 
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
   final FlutterSoundPlayer _player = FlutterSoundPlayer();
@@ -85,8 +89,20 @@ class _IntercomPageState extends ConsumerState<IntercomPage> {
         bufferSize: 4096,
       );
       _playerOpen = true;
+      // 强制扬声器外放（VoIP），否则全双工录+放会走听筒/不出声
+      try {
+        await _audioChannel.invokeMethod('speakerphone', {'on': true});
+      } on PlatformException {
+        // 忽略：个别机型无此能力
+      }
       _downSub = hub.onTalkAudio.listen((pcm) {
         if (_playerOpen && pcm.isNotEmpty) _player.uint8ListSink?.add(pcm);
+        // 收到对端音频 → 对方说话中（600ms 无帧则灭）
+        _peerTalkTimer?.cancel();
+        if (!_peerTalking && mounted) setState(() => _peerTalking = true);
+        _peerTalkTimer = Timer(const Duration(milliseconds: 600), () {
+          if (mounted) setState(() => _peerTalking = false);
+        });
       });
 
       // 发起对讲信令
@@ -174,7 +190,13 @@ class _IntercomPageState extends ConsumerState<IntercomPage> {
 
   Future<void> _cleanup({required bool notifyPeer}) async {
     _callTimer?.cancel();
+    _peerTalkTimer?.cancel();
     await _stopMedia();
+    try {
+      await _audioChannel.invokeMethod('speakerphone', {'on': false});
+    } on PlatformException {
+      // ignore
+    }
     if (notifyPeer && _talkId.isNotEmpty) {
       try {
         final repo = await ref.read(talkRepositoryProvider.future);
@@ -187,6 +209,7 @@ class _IntercomPageState extends ConsumerState<IntercomPage> {
 
   @override
   void dispose() {
+    _peerTalkTimer?.cancel();
     _talkEndedSub?.cancel();
     _downSub?.cancel();
     unawaited(_cleanup(notifyPeer: true));
@@ -262,11 +285,18 @@ class _IntercomPageState extends ConsumerState<IntercomPage> {
         Text(
           switch (_phase) {
             _TalkPhase.connecting => '正在建立对讲…',
-            _TalkPhase.talking => '通话中（免提·对方按键回话）',
+            _TalkPhase.talking =>
+              _peerTalking ? '对方说话中…' : '通话中（免提·对方按键回话）',
             _TalkPhase.ended => '对讲已结束',
             _TalkPhase.error => '',
           },
-          style: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
+          style: TextStyle(
+            color: _peerTalking && _phase == _TalkPhase.talking
+                ? const Color(0xFFFB8C00)
+                : AppColors.textSecondary,
+            fontSize: 14,
+            fontWeight: _peerTalking ? FontWeight.w700 : FontWeight.normal,
+          ),
         ),
         const Spacer(),
         Container(
