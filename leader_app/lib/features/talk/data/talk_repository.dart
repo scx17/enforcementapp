@@ -82,4 +82,42 @@ class TalkRepository {
       throw toAppException(e);
     }
   }
+
+  /// POST /api/talk/p2p/start — 发起 1对1 对讲，返回 talkId。
+  /// 设备收 IncomingTalk：双工自动应答全双工 / 单工来电+按住回话。
+  Future<String> p2pStart({
+    required String fromDeviceId,
+    required String fromName,
+    required String toDeviceId,
+  }) async {
+    try {
+      final resp = await _dio.post<Map<String, dynamic>>(
+        '/api/talk/p2p/start',
+        data: {
+          'fromDeviceId': fromDeviceId,
+          'fromName': fromName,
+          'toDeviceId': toDeviceId,
+        },
+      );
+      final data = resp.data ?? {};
+      if (data['success'] == false) {
+        throw AppException(0, data['error']?.toString() ?? '发起对讲失败');
+      }
+      return data['talkId']?.toString() ?? '';
+    } on DioException catch (e) {
+      throw toAppException(e);
+    }
+  }
+
+  /// POST /api/talk/p2p/end — 结束 1对1 对讲。
+  Future<void> p2pEnd({required String talkId, required String toDeviceId}) async {
+    try {
+      await _dio.post<dynamic>('/api/talk/p2p/end', data: {
+        'talkId': talkId,
+        'toDeviceId': toDeviceId,
+      });
+    } on DioException catch (e) {
+      throw toAppException(e);
+    }
+  }
 }

@@ -14,6 +14,12 @@ abstract final class HubEvents {
   /// 对讲结束（设备侧挂断或平台 stop 后广播）
   static const String talkEnded = 'TalkEnded';
 
+  /// 1对1 对讲下行音频（设备→指挥，裸 base64 PCM16 8kHz）
+  static const String talkAudio = 'TalkAudio';
+
+  /// 1对1 对讲结束（对端挂断，JSON 字符串 {talkId}）
+  static const String p2pTalkEnded = 'P2pTalkEnded';
+
   // ── 集群对讲半双工发言权 / 音频 ──
   /// 发言权授予（仅请求者收到，载荷为 channelId 裸字符串）
   static const String floorGranted = 'FloorGranted';

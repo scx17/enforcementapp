@@ -34,6 +34,8 @@ class HubConnectionManager {
   final _conferenceAudioController = StreamController<Uint8List>.broadcast();
   final _conferenceEventController =
       StreamController<Map<String, dynamic>>.broadcast();
+  // 1对1 对讲下行音频（设备→指挥，TalkAudio 裸 base64）
+  final _talkAudioController = StreamController<Uint8List>.broadcast();
 
   /// 发言权授予，载荷 channelId。
   Stream<String> get onFloorGranted => _floorGrantedController.stream;
@@ -52,6 +54,9 @@ class HubConnectionManager {
   /// 会议事件，载荷 {type, conferenceId, ...}。
   Stream<Map<String, dynamic>> get onConferenceEvent =>
       _conferenceEventController.stream;
+
+  /// 1对1 对讲下行音频帧（已解码 PCM）。
+  Stream<Uint8List> get onTalkAudio => _talkAudioController.stream;
 
   HubConnection? _connection;
   bool _disposed = false;
@@ -160,6 +165,29 @@ class HubConnectionManager {
         // 丢弃损坏帧
       }
     });
+    conn.on(HubEvents.talkAudio, (args) {
+      if (_disposed || args == null || args.isEmpty) return;
+      final b64 = args.first?.toString() ?? '';
+      if (b64.isEmpty) return;
+      try {
+        _talkAudioController.add(base64Decode(b64));
+      } on FormatException {
+        // 丢弃损坏帧
+      }
+    });
+    conn.on(HubEvents.p2pTalkEnded, (args) {
+      if (_disposed) return;
+      final raw = (args != null && args.isNotEmpty) ? args.first : null;
+      var talkId = '';
+      if (raw is String) {
+        try {
+          talkId = (json.decode(raw) as Map)['talkId']?.toString() ?? '';
+        } on FormatException {
+          talkId = '';
+        }
+      }
+      _talkEndedController.add(talkId); // 复用对端挂断流
+    });
   }
 
   /// 后端这些通知发的是 JSON 字符串（兼容 Android String handler）；
@@ -253,5 +281,6 @@ class HubConnectionManager {
     _speakerChangedController.close();
     _conferenceAudioController.close();
     _conferenceEventController.close();
+    _talkAudioController.close();
   }
 }

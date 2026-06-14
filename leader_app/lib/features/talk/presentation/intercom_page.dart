@@ -5,21 +5,20 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_sound/flutter_sound.dart';
-import 'package:media_kit/media_kit.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:hdc_mobile/core/http/api_exception.dart';
 import 'package:hdc_mobile/core/signalr/hub_connection_manager.dart';
 import 'package:hdc_mobile/core/theme/app_theme.dart';
-import 'package:hdc_mobile/features/devices/data/device_repository.dart';
+import 'package:hdc_mobile/features/auth/application/auth_controller.dart';
 import 'package:hdc_mobile/features/talk/data/talk_repository.dart';
 import 'package:hdc_mobile/shared/models/device_model.dart';
 import 'package:hdc_mobile/shared/utils/device_label.dart';
-import 'package:hdc_mobile/shared/utils/live_low_latency.dart';
 
-/// 单兵对讲页。
+/// 单兵对讲页（SignalR 1对1，全双工）。
 ///
-/// 「说」：按住话筒录 PCM16 8kHz → SignalR SendAudioToDevice 上行。
-/// 「听」：media_kit 播放 talk/start 返回的下行音频流。
+/// 指挥常开麦：录 PCM16 8kHz → SendAudioToDevice(设备) 上行；
+/// 设备音频经 TalkAudio 下行 → FlutterSoundPlayer 播放。
+/// 设备端按「对讲模式」：双工自动应答全双工 / 单工来电+按住回话。
 class IntercomPage extends ConsumerStatefulWidget {
   const IntercomPage({super.key, required this.device});
 
@@ -29,26 +28,30 @@ class IntercomPage extends ConsumerStatefulWidget {
   ConsumerState<IntercomPage> createState() => _IntercomPageState();
 }
 
-enum _TalkPhase { connecting, listening, talking, error, ended }
+enum _TalkPhase { connecting, talking, error, ended }
 
 class _IntercomPageState extends ConsumerState<IntercomPage> {
   static const int _sampleRate = 8000;
 
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
-  Player? _player;
+  final FlutterSoundPlayer _player = FlutterSoundPlayer();
+  bool _recorderOpen = false;
+  bool _playerOpen = false;
 
-  TalkSession? _session;
   _TalkPhase _phase = _TalkPhase.connecting;
   String? _errorMsg;
-  bool _muted = false;
+  String _talkId = '';
+  String _myId = 'leader';
 
   StreamController<Uint8List>? _audioController;
   StreamSubscription<Uint8List>? _audioSub;
+  StreamSubscription<Uint8List>? _downSub;
   StreamSubscription<String>? _talkEndedSub;
 
   Timer? _callTimer;
   Duration _callDuration = Duration.zero;
-  bool _recorderOpen = false;
+
+  String get _deviceId => widget.device.deviceId;
 
   @override
   void initState() {
@@ -57,70 +60,70 @@ class _IntercomPageState extends ConsumerState<IntercomPage> {
   }
 
   Future<void> _init() async {
-    // 麦克风权限
     final status = await Permission.microphone.request();
     if (!status.isGranted) {
       _fail('未授予麦克风权限，无法对讲');
       return;
     }
-
     try {
-      // 解析通道
-      var cid = widget.device.channelId;
-      if (cid == null || cid.isEmpty) {
-        final deviceRepo = await ref.read(deviceRepositoryProvider.future);
-        cid = await deviceRepo.getFirstChannelId(widget.device.deviceId);
-      }
+      final userName =
+          ref.read(authControllerProvider).valueOrNull?.userName ?? 'cmd';
+      _myId = 'leader-$userName';
 
-      // 建立对讲会话
-      final repo = await ref.read(talkRepositoryProvider.future);
-      final session = await repo.startTalk(
-        deviceId: widget.device.deviceId,
-        channelId: cid,
-      );
-      if (!mounted) return;
-      _session = session;
-
-      // 监听远端挂断
       final hub = ref.read(hubConnectionManagerProvider);
       await hub.connect();
-      await hub.joinTalkGroup(widget.device.deviceId);
-      _talkEndedSub = hub.onTalkEnded.listen((talkId) {
-        if (!mounted) return;
-        if (talkId.isEmpty || talkId == session.talkId) {
-          _endByRemote();
-        }
+      // 收设备上行音频：指挥须在自己的 device_notify 组
+      await hub.joinDeviceNotificationGroup(_myId);
+
+      // 下行播放（设备→指挥）
+      await _player.openPlayer();
+      await _player.startPlayerFromStream(
+        codec: Codec.pcm16,
+        interleaved: true,
+        numChannels: 1,
+        sampleRate: _sampleRate,
+        bufferSize: 4096,
+      );
+      _playerOpen = true;
+      _downSub = hub.onTalkAudio.listen((pcm) {
+        if (_playerOpen && pcm.isNotEmpty) _player.uint8ListSink?.add(pcm);
       });
 
-      // 打开录音器（说话用）
+      // 发起对讲信令
+      final repo = await ref.read(talkRepositoryProvider.future);
+      _talkId = await repo.p2pStart(
+        fromDeviceId: _myId,
+        fromName: userName,
+        toDeviceId: _deviceId,
+      );
+
+      // 对端挂断 → 结束
+      _talkEndedSub = hub.onTalkEnded.listen((talkId) {
+        if (!mounted) return;
+        if (talkId.isEmpty || talkId == _talkId) _endByRemote();
+      });
+
+      // 上行常开麦（全双工）
       await _recorder.openRecorder();
       _recorderOpen = true;
+      _audioController = StreamController<Uint8List>();
+      _audioSub = _audioController!.stream.listen((chunk) {
+        if (chunk.isNotEmpty) {
+          hub.sendAudioToDevice(_deviceId, base64Encode(chunk));
+        }
+      });
+      await _recorder.startRecorder(
+        toStream: _audioController!.sink,
+        codec: Codec.pcm16,
+        sampleRate: _sampleRate,
+        numChannels: 1,
+      );
 
-      // 先进入可说话状态：上行喊话不依赖下行播放，
-      // 避免下行流慢/WebRTC 不可用时 _player.open 卡住整个对讲、按不了「说话」。
       if (!mounted) return;
-      setState(() => _phase = _TalkPhase.listening);
+      setState(() => _phase = _TalkPhase.talking);
       _startCallTimer();
-
-      // 下行播放设备音频（非阻塞，失败不影响上行喊话）
-      unawaited(_openDownlink(session.nativeAudioUrl));
     } on AppException catch (e) {
       _fail(e.message);
-    }
-  }
-
-  /// 下行播放设备音频。独立于上行喊话，失败/慢不阻塞「说话」。
-  Future<void> _openDownlink(String? audioUrl) async {
-    if (audioUrl == null) return;
-    try {
-      final player = Player(
-        configuration: const PlayerConfiguration(bufferSize: 4 * 1024 * 1024),
-      );
-      _player = player;
-      await applyLiveLowLatency(player);
-      await player.open(Media(audioUrl), play: true);
-    } on Object catch (_) {
-      // 下行播放失败不影响上行喊话
     }
   }
 
@@ -144,78 +147,38 @@ class _IntercomPageState extends ConsumerState<IntercomPage> {
     if (_phase == _TalkPhase.ended) return;
     setState(() => _phase = _TalkPhase.ended);
     _callTimer?.cancel();
-    // 给用户一个「已结束」的瞬间反馈后退出
+    _stopMedia();
     Future.delayed(const Duration(milliseconds: 800), () {
       if (mounted) Navigator.of(context).maybePop();
     });
   }
 
-  Future<void> _startTalking() async {
-    if (_phase != _TalkPhase.listening || !_recorderOpen) return;
-    final session = _session;
-    if (session == null) return;
-
-    final hub = ref.read(hubConnectionManagerProvider);
-    final deviceId = widget.device.deviceId;
-
-    _audioController = StreamController<Uint8List>();
-    _audioSub = _audioController!.stream.listen((chunk) {
-      if (chunk.isEmpty) return;
-      // fire-and-forget 上行
-      hub.sendAudioToDevice(deviceId, base64Encode(chunk));
-    });
-
-    await _recorder.startRecorder(
-      toStream: _audioController!.sink,
-      codec: Codec.pcm16,
-      sampleRate: _sampleRate,
-      numChannels: 1,
-    );
-    if (!mounted) return;
-    setState(() => _phase = _TalkPhase.talking);
+  Future<void> _hangUp() async {
+    await _cleanup(notifyPeer: true);
+    if (mounted) Navigator.of(context).maybePop();
   }
 
-  Future<void> _stopTalking() async {
-    if (_phase != _TalkPhase.talking) return;
-    if (_recorderOpen) await _recorder.stopRecorder();
+  Future<void> _stopMedia() async {
     await _audioSub?.cancel();
     await _audioController?.close();
     _audioSub = null;
     _audioController = null;
-    if (!mounted) return;
-    setState(() => _phase = _TalkPhase.listening);
-  }
-
-  void _toggleMute() {
-    setState(() => _muted = !_muted);
-    _player?.setVolume(_muted ? 0 : 100);
-  }
-
-  Future<void> _hangUp() async {
-    await _cleanup();
-    if (mounted) Navigator.of(context).maybePop();
-  }
-
-  Future<void> _cleanup() async {
-    _callTimer?.cancel();
-    await _audioSub?.cancel();
-    await _audioController?.close();
     if (_recorderOpen) {
       try {
         await _recorder.stopRecorder();
       } on Exception {
         // ignore
       }
-      await _recorder.closeRecorder();
-      _recorderOpen = false;
     }
-    await _player?.dispose();
-    _player = null;
-    final talkId = _session?.talkId;
-    if (talkId != null && talkId.isNotEmpty) {
+  }
+
+  Future<void> _cleanup({required bool notifyPeer}) async {
+    _callTimer?.cancel();
+    await _stopMedia();
+    if (notifyPeer && _talkId.isNotEmpty) {
       try {
         final repo = await ref.read(talkRepositoryProvider.future);
-        await repo.stopTalk(talkId);
+        await repo.p2pEnd(talkId: _talkId, toDeviceId: _deviceId);
       } on AppException {
         // ignore
       }
@@ -225,8 +188,12 @@ class _IntercomPageState extends ConsumerState<IntercomPage> {
   @override
   void dispose() {
     _talkEndedSub?.cancel();
-    // 同步触发清理（不等待）
-    unawaited(_cleanup());
+    _downSub?.cancel();
+    unawaited(_cleanup(notifyPeer: true));
+    if (_recorderOpen) _recorder.closeRecorder();
+    if (_playerOpen) {
+      _player.stopPlayer().whenComplete(() => _player.closePlayer());
+    }
     super.dispose();
   }
 
@@ -237,10 +204,7 @@ class _IntercomPageState extends ConsumerState<IntercomPage> {
       appBar: AppBar(
         backgroundColor: AppColors.scaffold,
         title: const Text('单兵对讲'),
-        leading: IconButton(
-          icon: const Icon(Icons.close),
-          onPressed: _hangUp,
-        ),
+        leading: IconButton(icon: const Icon(Icons.close), onPressed: _hangUp),
       ),
       body: SafeArea(
         child: Column(
@@ -281,12 +245,10 @@ class _IntercomPageState extends ConsumerState<IntercomPage> {
 
     final isConnecting = _phase == _TalkPhase.connecting;
     final isTalking = _phase == _TalkPhase.talking;
-    final isEnded = _phase == _TalkPhase.ended;
 
     return Column(
       children: [
         const Spacer(),
-        // 计时
         Text(
           _fmtDuration(_callDuration),
           style: const TextStyle(
@@ -300,68 +262,43 @@ class _IntercomPageState extends ConsumerState<IntercomPage> {
         Text(
           switch (_phase) {
             _TalkPhase.connecting => '正在建立对讲…',
-            _TalkPhase.talking => '说话中',
-            _TalkPhase.listening => '收听中',
+            _TalkPhase.talking => '通话中（全双工）',
             _TalkPhase.ended => '对讲已结束',
             _TalkPhase.error => '',
           },
           style: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
         ),
         const Spacer(),
-        // PTT 按钮
-        GestureDetector(
-          onTapDown: isConnecting || isEnded ? null : (_) => _startTalking(),
-          onTapUp: isConnecting || isEnded ? null : (_) => _stopTalking(),
-          onTapCancel: isConnecting || isEnded ? null : _stopTalking,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            width: 160,
-            height: 160,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: isTalking
-                  ? AppColors.primary
-                  : AppColors.primary.withValues(alpha: 0.15),
-              border: Border.all(
-                color: AppColors.primary,
-                width: isTalking ? 3 : 2,
-              ),
-            ),
-            child: Icon(
-              Icons.mic,
-              size: 56,
-              color: isTalking ? Colors.white : AppColors.primary,
-            ),
+        Container(
+          width: 160,
+          height: 160,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: isTalking
+                ? AppColors.primary.withValues(alpha: 0.2)
+                : AppColors.primary.withValues(alpha: 0.1),
+            border: Border.all(color: AppColors.primary, width: 2),
+          ),
+          child: Icon(
+            isConnecting ? Icons.hourglass_top : Icons.graphic_eq,
+            size: 56,
+            color: AppColors.primary,
           ),
         ),
         const SizedBox(height: 16),
-        Text(
-          isConnecting ? '请稍候' : '按住 说话',
-          style: const TextStyle(color: AppColors.textMuted, fontSize: 13),
+        const Text(
+          '免提通话中，直接说话',
+          style: TextStyle(color: AppColors.textMuted, fontSize: 13),
         ),
         const Spacer(),
-        // 底部控制：静音 / 挂断
         Padding(
           padding: const EdgeInsets.only(bottom: 32),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _CircleButton(
-                icon: _muted ? Icons.volume_off : Icons.volume_up,
-                label: _muted ? '已静音' : '扬声器',
-                color: AppColors.surface,
-                iconColor: AppColors.textSecondary,
-                onTap: isConnecting || isEnded ? null : _toggleMute,
-              ),
-              const SizedBox(width: 40),
-              _CircleButton(
-                icon: Icons.call_end,
-                label: '挂断',
-                color: AppColors.alarm,
-                iconColor: Colors.white,
-                onTap: _hangUp,
-              ),
-            ],
+          child: _CircleButton(
+            icon: Icons.call_end,
+            label: '挂断',
+            color: AppColors.alarm,
+            iconColor: Colors.white,
+            onTap: _hangUp,
           ),
         ),
       ],
@@ -447,10 +384,10 @@ class _CircleButton extends StatelessWidget {
           GestureDetector(
             onTap: onTap,
             child: Container(
-              width: 56,
-              height: 56,
+              width: 64,
+              height: 64,
               decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-              child: Icon(icon, color: iconColor, size: 24),
+              child: Icon(icon, color: iconColor, size: 26),
             ),
           ),
           const SizedBox(height: 6),
