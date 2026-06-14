@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:signalr_netcore/signalr_client.dart';
 import 'package:hdc_mobile/core/config/app_config.dart';
@@ -22,6 +24,34 @@ class HubConnectionManager {
   final StreamController<String> _deviceOnlineController;
   final StreamController<String> _deviceOfflineController;
   final StreamController<String> _talkEndedController;
+
+  // 集群对讲半双工事件
+  final _floorGrantedController = StreamController<String>.broadcast();
+  final _floorDeniedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final _speakerChangedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final _conferenceAudioController = StreamController<Uint8List>.broadcast();
+  final _conferenceEventController =
+      StreamController<Map<String, dynamic>>.broadcast();
+
+  /// 发言权授予，载荷 channelId。
+  Stream<String> get onFloorGranted => _floorGrantedController.stream;
+
+  /// 发言权被拒，载荷 {channelId, holder}。
+  Stream<Map<String, dynamic>> get onFloorDenied =>
+      _floorDeniedController.stream;
+
+  /// 说话人变化，载荷 {channelId, deviceId, speaking}。
+  Stream<Map<String, dynamic>> get onSpeakerChanged =>
+      _speakerChangedController.stream;
+
+  /// 会议组音频帧（已解码 PCM）。
+  Stream<Uint8List> get onConferenceAudio => _conferenceAudioController.stream;
+
+  /// 会议事件，载荷 {type, conferenceId, ...}。
+  Stream<Map<String, dynamic>> get onConferenceEvent =>
+      _conferenceEventController.stream;
 
   HubConnection? _connection;
   bool _disposed = false;
@@ -108,6 +138,48 @@ class HubConnectionManager {
           : payload?.toString() ?? '';
       _talkEndedController.add(talkId);
     });
+
+    // ── 集群对讲半双工 ──
+    conn.on(HubEvents.floorGranted, (args) {
+      if (_disposed || args == null || args.isEmpty) return;
+      _floorGrantedController.add(args.first?.toString() ?? '');
+    });
+    conn.on(HubEvents.floorDenied,
+        (args) => _emitJson(_floorDeniedController, args));
+    conn.on(HubEvents.speakerChanged,
+        (args) => _emitJson(_speakerChangedController, args));
+    conn.on(HubEvents.conferenceEvent,
+        (args) => _emitJson(_conferenceEventController, args));
+    conn.on(HubEvents.conferenceAudio, (args) {
+      if (_disposed || args == null || args.isEmpty) return;
+      final b64 = args.first?.toString() ?? '';
+      if (b64.isEmpty) return;
+      try {
+        _conferenceAudioController.add(base64Decode(b64));
+      } on FormatException {
+        // 丢弃损坏帧
+      }
+    });
+  }
+
+  /// 后端这些通知发的是 JSON 字符串（兼容 Android String handler）；
+  /// 也兜底直接收到 Map 的情况。
+  void _emitJson(
+      StreamController<Map<String, dynamic>> controller, List<Object?>? args) {
+    if (_disposed || args == null || args.isEmpty) return;
+    final raw = args.first;
+    Map<String, dynamic>? map;
+    if (raw is String) {
+      try {
+        final decoded = json.decode(raw);
+        if (decoded is Map) map = decoded.cast<String, dynamic>();
+      } on FormatException {
+        map = null;
+      }
+    } else if (raw is Map) {
+      map = raw.cast<String, dynamic>();
+    }
+    if (map != null) controller.add(map);
   }
 
   /// 加入设备对讲音频组。
@@ -148,6 +220,20 @@ class HubConnectionManager {
     );
   }
 
+  /// 请求发言权（半双工 PTT）。
+  Future<void> requestFloor(String conferenceId, String deviceId) async {
+    if (!isConnected) return;
+    await _connection
+        ?.invoke(HubMethods.requestFloor, args: [conferenceId, deviceId]);
+  }
+
+  /// 释放发言权。
+  Future<void> releaseFloor(String conferenceId, String deviceId) async {
+    if (!isConnected) return;
+    await _connection
+        ?.invoke(HubMethods.releaseFloor, args: [conferenceId, deviceId]);
+  }
+
   void dispose() {
     _disposed = true;
     _connection?.stop();
@@ -155,5 +241,10 @@ class HubConnectionManager {
     _deviceOnlineController.close();
     _deviceOfflineController.close();
     _talkEndedController.close();
+    _floorGrantedController.close();
+    _floorDeniedController.close();
+    _speakerChangedController.close();
+    _conferenceAudioController.close();
+    _conferenceEventController.close();
   }
 }

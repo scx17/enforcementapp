@@ -13,6 +13,22 @@ abstract final class HubEvents {
 
   /// 对讲结束（设备侧挂断或平台 stop 后广播）
   static const String talkEnded = 'TalkEnded';
+
+  // ── 集群对讲半双工发言权 / 音频 ──
+  /// 发言权授予（仅请求者收到，载荷为 channelId 裸字符串）
+  static const String floorGranted = 'FloorGranted';
+
+  /// 发言权被拒（载荷 JSON 字符串 {channelId, holder}）
+  static const String floorDenied = 'FloorDenied';
+
+  /// 说话人变化（载荷 JSON 字符串 {channelId, deviceId, speaking}）
+  static const String speakerChanged = 'SpeakerChanged';
+
+  /// 会议组音频帧（载荷 Base64 PCM16 8kHz 裸字符串）
+  static const String conferenceAudio = 'ConferenceAudio';
+
+  /// 会议事件（载荷 JSON 字符串 {type, conferenceId, ...}，type=ended/member_joined/...）
+  static const String conferenceEvent = 'ConferenceEvent';
 }
 
 abstract final class HubMethods {
@@ -36,4 +52,10 @@ abstract final class HubMethods {
 
   /// 上行麦克风音频到会议组（喊话）
   static const String sendConferenceAudio = 'SendConferenceAudio';
+
+  /// 请求发言权（半双工，args: channelId, deviceId）
+  static const String requestFloor = 'RequestFloor';
+
+  /// 释放发言权（args: channelId, deviceId）
+  static const String releaseFloor = 'ReleaseFloor';
 }
