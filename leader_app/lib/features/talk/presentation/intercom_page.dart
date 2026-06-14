@@ -262,7 +262,7 @@ class _IntercomPageState extends ConsumerState<IntercomPage> {
         Text(
           switch (_phase) {
             _TalkPhase.connecting => '正在建立对讲…',
-            _TalkPhase.talking => '通话中（全双工）',
+            _TalkPhase.talking => '通话中（免提·对方按键回话）',
             _TalkPhase.ended => '对讲已结束',
             _TalkPhase.error => '',
           },
@@ -287,7 +287,7 @@ class _IntercomPageState extends ConsumerState<IntercomPage> {
         ),
         const SizedBox(height: 16),
         const Text(
-          '免提通话中，直接说话',
+          '免提直接说话；对方按住对讲键回话',
           style: TextStyle(color: AppColors.textMuted, fontSize: 13),
         ),
         const Spacer(),
