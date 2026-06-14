@@ -6,7 +6,9 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioRecord
 import android.media.AudioTrack
+import android.media.MediaRecorder
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -42,6 +44,18 @@ class PlatformNotificationService(
     /** 当前所在的集群会议 ID；null 表示未入会。用于重连后自动重新入组。 */
     @Volatile
     private var currentConferenceId: String? = null
+    /** 当前会议名称（邀请时携带），供 UI 展示。 */
+    @Volatile
+    private var currentConferenceName: String? = null
+    /** 当前持有发言权的设备 ID；null 表示无人说话。 */
+    @Volatile
+    private var currentSpeaker: String? = null
+
+    // 上行采集（PTT 抢到麦后启动）
+    @Volatile private var uplinkRunning = false
+    private var uplinkThread: Thread? = null
+    private var audioRecord: AudioRecord? = null
+
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     val notifications: CopyOnWriteArrayList<PlatformNotification> = CopyOnWriteArrayList()
@@ -53,6 +67,14 @@ class PlatformNotificationService(
     var onConfigPushReceived: ((org.json.JSONObject) -> Unit)? = null
     var onCustomCodeChanged: ((String) -> Unit)? = null
     var onTakeSnapshotRequested: ((requestId: String) -> Unit)? = null
+
+    // 集群对讲发言权事件（供 UI 更新状态）
+    /** 抢到麦 → 自动开始上行采集；UI 可据此显示"说话中"。 */
+    var onFloorGranted: ((channelId: String) -> Unit)? = null
+    /** 抢麦失败 → holder 是当前说话者，UI 提示"XX 正在说话"。 */
+    var onFloorDenied: ((holder: String, reason: String) -> Unit)? = null
+    /** 发言者变更（含自己开始/停止）。 */
+    var onSpeakerChanged: ((deviceId: String, speaking: Boolean) -> Unit)? = null
 
     // 无限重连状态机
     private val reconnecting = AtomicBoolean(false)
@@ -151,6 +173,7 @@ class PlatformNotificationService(
                     if (confId > 0) {
                         val cid = confId.toString()
                         currentConferenceId = cid
+                        currentConferenceName = name
                         conn.invoke("JoinConferenceGroup", cid)
                         Timber.i("集群对讲: 已入会 conferenceId=$confId, name=$name")
                     } else {
@@ -190,6 +213,40 @@ class PlatformNotificationService(
                     }
                 } catch (e: Exception) {
                     Timber.e(e, "ConferenceEvent 处理失败")
+                }
+            }, String::class.java)
+
+            // 集群对讲：发言权授予 → 自动开始上行采集
+            conn.on("FloorGranted", { channelId: String ->
+                Timber.i("集群对讲: 发言权授予 channel=$channelId")
+                startTalkUplink()
+                onFloorGranted?.invoke(channelId)
+            }, String::class.java)
+
+            // 集群对讲：抢麦失败
+            conn.on("FloorDenied", { data: String ->
+                try {
+                    val json = org.json.JSONObject(data)
+                    val holder = json.optString("holder", "")
+                    val reason = json.optString("reason", "")
+                    Timber.i("集群对讲: 发言权拒绝 holder=$holder reason=$reason")
+                    onFloorDenied?.invoke(holder, reason)
+                } catch (e: Exception) {
+                    Timber.w(e, "FloorDenied 解析失败")
+                }
+            }, String::class.java)
+
+            // 集群对讲：发言者变更
+            conn.on("SpeakerChanged", { data: String ->
+                try {
+                    val json = org.json.JSONObject(data)
+                    val deviceId = json.optString("deviceId", "")
+                    val speaking = json.optBoolean("speaking", false)
+                    currentSpeaker = if (speaking && deviceId.isNotEmpty()) deviceId else null
+                    Timber.i("集群对讲: 发言者变更 device=$deviceId speaking=$speaking")
+                    onSpeakerChanged?.invoke(deviceId, speaking)
+                } catch (e: Exception) {
+                    Timber.w(e, "SpeakerChanged 解析失败")
                 }
             }, String::class.java)
 
@@ -571,6 +628,104 @@ class PlatformNotificationService(
         audioTrack?.release()
         audioTrack = null
         Timber.i("TalkAudio: AudioTrack 已释放")
+    }
+
+    // ===== 集群对讲：发言权 + 上行采集 =====
+
+    /** 当前频道 ID（已自动加入）；null 表示未入会。 */
+    fun currentChannelId(): String? = currentConferenceId
+
+    /** 当前频道名称（邀请时携带）。 */
+    fun currentChannelName(): String? = currentConferenceName
+
+    /** 当前持有发言权的设备 ID；null 表示无人说话。 */
+    fun currentSpeakerDevice(): String? = currentSpeaker
+
+    /** 请求发言权（PTT 抢麦）。抢到后会收到 FloorGranted → 自动开始上行采集。 */
+    fun requestFloor() {
+        val cid = currentConferenceId ?: run {
+            Timber.w("requestFloor: 未加入任何频道")
+            return
+        }
+        val conn = connection ?: return
+        try {
+            conn.invoke("RequestFloor", cid, settings.deviceId)
+            Timber.i("集群对讲: 请求发言权 channel=$cid device=${settings.deviceId}")
+        } catch (e: Exception) {
+            Timber.w(e, "requestFloor 失败")
+        }
+    }
+
+    /** 释放发言权（松开 PTT），并停止上行采集。 */
+    fun releaseFloor() {
+        stopTalkUplink()
+        val cid = currentConferenceId ?: return
+        val conn = connection ?: return
+        try {
+            conn.invoke("ReleaseFloor", cid, settings.deviceId)
+            Timber.i("集群对讲: 释放发言权 channel=$cid")
+        } catch (e: Exception) {
+            Timber.w(e, "releaseFloor 失败")
+        }
+    }
+
+    /**
+     * 启动上行采集：8kHz/16bit/mono AudioRecord → base64 → SendConferenceAudio。
+     * 抢到发言权后自动调用。期间每 ~2s（100 帧 × 20ms）重新 RequestFloor 保活（FloorLock 5s 超时）。
+     */
+    private fun startTalkUplink() {
+        val cid = currentConferenceId ?: return
+        val conn = connection ?: return
+        if (uplinkRunning) return
+        uplinkRunning = true
+        uplinkThread = Thread {
+            val sampleRate = 8000
+            val frameBytes = sampleRate / 50 * 2 // 20ms = 320 字节
+            try {
+                val ar = AudioRecord(
+                    MediaRecorder.AudioSource.MIC, sampleRate,
+                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, frameBytes * 4
+                )
+                audioRecord = ar
+                ar.startRecording()
+                Timber.i("集群对讲: 上行采集启动 sampleRate=$sampleRate")
+                val buf = ByteArray(frameBytes)
+                val deviceId = settings.deviceId
+                var tick = 0
+                while (uplinkRunning && !Thread.currentThread().isInterrupted
+                    && conn.connectionState == HubConnectionState.CONNECTED) {
+                    ar.read(buf, 0, frameBytes)
+                    val b64 = Base64.encodeToString(buf, Base64.NO_WRAP)
+                    try {
+                        conn.invoke("SendConferenceAudio", cid, b64)
+                    } catch (e: Exception) {
+                        Timber.w(e, "上行音频发送失败")
+                    }
+                    // 每 ~2s 重新 RequestFloor 保活发言权
+                    if (++tick % 100 == 0) {
+                        try { conn.invoke("RequestFloor", cid, deviceId) } catch (e: Exception) {}
+                    }
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "上行采集失败")
+            } finally {
+                try { audioRecord?.stop() } catch (e: Exception) {}
+                try { audioRecord?.release() } catch (e: Exception) {}
+                audioRecord = null
+                Timber.i("集群对讲: 上行采集已停止")
+            }
+        }.apply {
+            name = "Talk-Uplink"
+            isDaemon = true
+        }
+        uplinkThread?.start()
+    }
+
+    /** 停止上行采集（释放发言权时调用）。 */
+    fun stopTalkUplink() {
+        uplinkRunning = false
+        uplinkThread?.interrupt()
+        uplinkThread = null
     }
 
     companion object {
