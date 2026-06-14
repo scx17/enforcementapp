@@ -5,6 +5,7 @@ import 'package:hdc_mobile/core/theme/app_theme.dart';
 import 'package:hdc_mobile/features/alarm/presentation/alarm_page.dart';
 import 'package:hdc_mobile/features/auth/application/auth_controller.dart';
 import 'package:hdc_mobile/features/auth/presentation/login_page.dart';
+import 'package:hdc_mobile/features/conference/presentation/member_select_page.dart';
 import 'package:hdc_mobile/features/devices/presentation/device_list_page.dart';
 import 'package:hdc_mobile/features/monitor/presentation/monitor_page.dart';
 import 'package:hdc_mobile/features/settings/presentation/settings_page.dart';
@@ -51,6 +52,15 @@ final routerProvider = Provider<GoRouter>((ref) {
                 path: '/devices',
                 pageBuilder: (ctx, st) =>
                     const NoTransitionPage(child: DeviceListPage()),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/intercom',
+                pageBuilder: (ctx, st) =>
+                    const NoTransitionPage(child: MemberSelectPage()),
               ),
             ],
           ),
@@ -105,6 +115,11 @@ class _MainScaffold extends ConsumerWidget {
             icon: Icon(Icons.devices_outlined),
             activeIcon: Icon(Icons.devices),
             label: '设备',
+          ),
+          const BottomNavigationBarItem(
+            icon: Icon(Icons.campaign_outlined),
+            activeIcon: Icon(Icons.campaign),
+            label: '对讲',
           ),
           BottomNavigationBarItem(
             icon: _AlarmNavIcon(unread: unreadCount),
