@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:hdc_mobile/core/http/api_exception.dart';
 import 'package:hdc_mobile/core/signalr/hub_connection_manager.dart';
 import 'package:hdc_mobile/core/theme/app_theme.dart';
 import 'package:hdc_mobile/features/auth/application/auth_controller.dart';
@@ -227,18 +226,17 @@ class _ConferenceRoomPageState extends ConsumerState<ConferenceRoomPage> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _endConference() async {
+  void _endConference() {
     if (_ended) return;
     _ended = true;
-    await _stopTalking();
+    // 立即退出页面，避免 recorder.stop/接口慢导致卡住；录放收尾在 dispose，离组/结束异步发出
     final hub = ref.read(hubConnectionManagerProvider);
-    await hub.leaveConferenceGroup(_confId);
-    try {
-      final repo = await ref.read(conferenceRepositoryProvider.future);
-      await repo.end(widget.conferenceId);
-    } on AppException {
-      // 结束接口失败不阻塞退出
-    }
+    unawaited(hub.releaseFloor(_confId, _myId).catchError((_) {}));
+    unawaited(hub.leaveConferenceGroup(_confId).catchError((_) {}));
+    ref
+        .read(conferenceRepositoryProvider.future)
+        .then((repo) => repo.end(widget.conferenceId).catchError((_) {}))
+        .catchError((_) {});
     if (mounted) Navigator.of(context).maybePop();
   }
 
