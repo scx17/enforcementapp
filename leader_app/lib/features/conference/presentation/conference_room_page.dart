@@ -57,6 +57,7 @@ class _ConferenceRoomPageState extends ConsumerState<ConferenceRoomPage> {
   Timer? _heartbeat; // 发言权 2.5s 续约
   Timer? _floorTimeout; // 抢麦 3s 兜底
   Timer? _speakerTimeout; // 说话人 6s 自超时
+  Timer? _presenceTimer; // 25s 刷新在线（供组长硬退出兜底巡检）
   Timer? _timer;
   Duration _duration = Duration.zero;
 
@@ -77,6 +78,11 @@ class _ConferenceRoomPageState extends ConsumerState<ConferenceRoomPage> {
     final hub = ref.read(hubConnectionManagerProvider);
     await hub.connect();
     await hub.joinConferenceGroup(_confId);
+    // 注册在线（领导作组长），并每 25s 刷新；硬退出后超宽限由后端自动转交
+    await hub.joinDeviceNotificationGroup(_myId);
+    _presenceTimer = Timer.periodic(const Duration(seconds: 25), (_) {
+      hub.joinDeviceNotificationGroup(_myId);
+    });
 
     // 收听播放
     await _player.openPlayer();
@@ -242,6 +248,7 @@ class _ConferenceRoomPageState extends ConsumerState<ConferenceRoomPage> {
     _heartbeat?.cancel();
     _floorTimeout?.cancel();
     _speakerTimeout?.cancel();
+    _presenceTimer?.cancel();
     for (final s in _hubSubs) {
       s.cancel();
     }

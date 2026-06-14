@@ -220,6 +220,13 @@ class HubConnectionManager {
     );
   }
 
+  /// 加入设备通知组并刷新后端在线时间（领导作组长时供硬退出兜底巡检判断在线）。
+  Future<void> joinDeviceNotificationGroup(String deviceId) async {
+    if (!isConnected) return;
+    await _connection
+        ?.invoke(HubMethods.joinDeviceNotificationGroup, args: [deviceId]);
+  }
+
   /// 请求发言权（半双工 PTT）。
   Future<void> requestFloor(String conferenceId, String deviceId) async {
     if (!isConnected) return;

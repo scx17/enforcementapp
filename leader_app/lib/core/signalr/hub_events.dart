@@ -53,6 +53,9 @@ abstract final class HubMethods {
   /// 上行麦克风音频到会议组（喊话）
   static const String sendConferenceAudio = 'SendConferenceAudio';
 
+  /// 加入设备通知组（同时向后端刷新在线时间，供组长硬退出兜底巡检判断）
+  static const String joinDeviceNotificationGroup = 'JoinDeviceNotificationGroup';
+
   /// 请求发言权（半双工，args: channelId, deviceId）
   static const String requestFloor = 'RequestFloor';
 
