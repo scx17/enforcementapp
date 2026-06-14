@@ -1,8 +1,11 @@
 package com.hdcollection.enforcement.upgrade
 
 import android.app.admin.DeviceAdminReceiver
+import android.app.admin.DevicePolicyManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import timber.log.Timber
 
 /**
@@ -17,6 +20,9 @@ import timber.log.Timber
  * 设备前置条件：
  *   - 只有 system user，没有添加额外用户/Google 账户
  *   - App 已安装（dpm 命令需要先有这个组件）
+ *
+ * 紧急释放 Device Owner（用于卸载 App）：
+ *   adb shell am broadcast -a com.hdcollection.enforcement.RELEASE_DEVICE_OWNER
  */
 class AppDeviceAdminReceiver : DeviceAdminReceiver() {
     override fun onEnabled(context: Context, intent: Intent) {
@@ -27,5 +33,26 @@ class AppDeviceAdminReceiver : DeviceAdminReceiver() {
     override fun onDisabled(context: Context, intent: Intent) {
         super.onDisabled(context, intent)
         Timber.w("AppDeviceAdmin: 已禁用 Device Admin（远程升级将退化到弹窗安装）")
+    }
+}
+
+/**
+ * 释放 Device Owner 权限的广播接收器。
+ * 由 adb 触发：adb shell am broadcast -a com.hdcollection.enforcement.RELEASE_DEVICE_OWNER
+ */
+class ReleaseDeviceOwnerReceiver : BroadcastReceiver() {
+    companion object {
+        private const val ACTION_RELEASE = "com.hdcollection.enforcement.RELEASE_DEVICE_OWNER"
+    }
+
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != ACTION_RELEASE) return
+        try {
+            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            dpm.clearDeviceOwnerApp(context.packageName)
+            Timber.w("ReleaseDeviceOwner: 已释放 Device Owner 权限")
+        } catch (e: Exception) {
+            Timber.e(e, "ReleaseDeviceOwner: 释放失败")
+        }
     }
 }

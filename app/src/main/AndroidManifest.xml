@@ -156,6 +156,15 @@
             </intent-filter>
         </receiver>
 
+        <!-- 释放 Device Owner 权限：adb shell am broadcast -a com.hdcollection.enforcement.RELEASE_DEVICE_OWNER -->
+        <receiver
+            android:name=".upgrade.ReleaseDeviceOwnerReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.hdcollection.enforcement.RELEASE_DEVICE_OWNER" />
+            </intent-filter>
+        </receiver>
+
         <!-- 静默安装结果回调 -->
         <receiver
             android:name=".upgrade.InstallResultReceiver"
