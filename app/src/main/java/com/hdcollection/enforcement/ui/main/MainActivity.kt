@@ -822,28 +822,33 @@ class MainActivity : AppCompatActivity(), MediaCaptureService.Listener {
                     )
                 }
             }
+            // 硬件 PTT 键 → 集群对讲（半双工抢麦/松麦）。
+            // SIP 单兵对讲呼叫指挥中心保留在 FunctionActivity.btnGroupIntercom，不在此触发。
             HardwareKeyReceiver.KeyAction.PTT_DOWN -> {
-                val sipManager = (application as EnforcementApp).sipManager
-                if (!sipManager.isInCall()) {
-                    val targetUri = "sip:commander@${settings.sipServer}"
-                    sipManager.makeCall(targetUri)
-                    Timber.i("PTT: calling $targetUri")
+                val ns = (application as EnforcementApp).notificationService
+                val cid = ns.currentChannelId()
+                if (cid == null) {
+                    Timber.w("PTT_DOWN: 未加入任何集群频道，忽略")
+                    android.widget.Toast.makeText(this, "未加入集群频道", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    ns.requestFloor()
+                    Timber.i("PTT: 请求集群发言权 channel=$cid")
                     UserOpLogger.record(
                         operationType = "PTTStart",
-                        description = "PTT 发起对讲",
-                        targetType = "sip",
-                        targetId = targetUri
+                        description = "PTT 集群对讲抢麦",
+                        targetType = "channel",
+                        targetId = cid
                     )
                 }
             }
             HardwareKeyReceiver.KeyAction.PTT_UP -> {
-                val sipManager = (application as EnforcementApp).sipManager
-                if (sipManager.isInCall()) {
-                    sipManager.hangup()
-                    Timber.i("PTT: call ended")
+                val ns = (application as EnforcementApp).notificationService
+                if (ns.currentChannelId() != null) {
+                    ns.releaseFloor()
+                    Timber.i("PTT: 释放集群发言权")
                     UserOpLogger.record(
                         operationType = "PTTEnd",
-                        description = "PTT 结束对讲"
+                        description = "PTT 集群对讲松麦"
                     )
                 }
             }
