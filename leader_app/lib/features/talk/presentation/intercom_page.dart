@@ -92,26 +92,35 @@ class _IntercomPageState extends ConsumerState<IntercomPage> {
         }
       });
 
-      // 播放下行音频（听设备）
-      final audioUrl = session.nativeAudioUrl;
-      if (audioUrl != null) {
-        _player = Player(
-          configuration:
-              const PlayerConfiguration(bufferSize: 4 * 1024 * 1024),
-        );
-        await applyLiveLowLatency(_player!);
-        await _player!.open(Media(audioUrl), play: true);
-      }
-
-      // 打开录音器
+      // 打开录音器（说话用）
       await _recorder.openRecorder();
       _recorderOpen = true;
 
+      // 先进入可说话状态：上行喊话不依赖下行播放，
+      // 避免下行流慢/WebRTC 不可用时 _player.open 卡住整个对讲、按不了「说话」。
       if (!mounted) return;
       setState(() => _phase = _TalkPhase.listening);
       _startCallTimer();
+
+      // 下行播放设备音频（非阻塞，失败不影响上行喊话）
+      unawaited(_openDownlink(session.nativeAudioUrl));
     } on AppException catch (e) {
       _fail(e.message);
+    }
+  }
+
+  /// 下行播放设备音频。独立于上行喊话，失败/慢不阻塞「说话」。
+  Future<void> _openDownlink(String? audioUrl) async {
+    if (audioUrl == null) return;
+    try {
+      final player = Player(
+        configuration: const PlayerConfiguration(bufferSize: 4 * 1024 * 1024),
+      );
+      _player = player;
+      await applyLiveLowLatency(player);
+      await player.open(Media(audioUrl), play: true);
+    } on Object catch (_) {
+      // 下行播放失败不影响上行喊话
     }
   }
 

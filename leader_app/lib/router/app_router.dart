@@ -119,7 +119,7 @@ class _MainScaffold extends ConsumerWidget {
           const BottomNavigationBarItem(
             icon: Icon(Icons.campaign_outlined),
             activeIcon: Icon(Icons.campaign),
-            label: '对讲',
+            label: '集群对讲',
           ),
           BottomNavigationBarItem(
             icon: _AlarmNavIcon(unread: unreadCount),
